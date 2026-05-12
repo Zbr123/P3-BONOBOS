@@ -4,8 +4,7 @@ npm-debug.log
 yarn-error.log
 package-lock.json.bak
 
-# Environment
-.env
+# Environment (`.env` is tracked on purpose — use a private repo or rotate secrets.)
 .env.*
 !.env.example
 

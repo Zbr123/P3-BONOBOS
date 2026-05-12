@@ -1,0 +1,35 @@
+{
+  "products": {
+    "knit_polo": {
+      "handle": "stretch-washed-chino-pant",
+      "size": "32x32",
+      "color": "Navy"
+    },
+    "shirt": {
+      "handle": "tech-button-down",
+      "size": "M",
+      "color": "White"
+    }
+  },
+  "addresses": {
+    "default_us": {
+      "firstName": "QA",
+      "lastName": "Tester",
+      "line1": "47 W 14th St",
+      "line2": "",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10011",
+      "country": "United States",
+      "phone": "5555555555"
+    }
+  },
+  "creditCards": {
+    "test_visa": {
+      "number": "4242 4242 4242 4242",
+      "expiry": "12/30",
+      "cvc": "123",
+      "name": "QA Tester"
+    }
+  }
+}

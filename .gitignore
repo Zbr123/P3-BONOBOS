@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json.bak
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+reports/
+screenshots/
+videos/
+traces/
+logs/
+downloads/
+allure-results/
+allure-report/
+
+# Persisted Playwright storage (cookies incl. cf_clearance) — re-generated locally
+state/
+
+# Editor / OS
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+*.tmp
+*.swp
+coverage/
+.nyc_output/

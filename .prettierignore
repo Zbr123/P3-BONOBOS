@@ -1,0 +1,10 @@
+node_modules
+reports
+allure-results
+allure-report
+screenshots
+videos
+traces
+logs
+downloads
+package-lock.json

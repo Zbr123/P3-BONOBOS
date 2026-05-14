@@ -24,7 +24,6 @@ const common = {
     'features/hooks/common.steps.js',
     'features/**/*.steps.js',
   ],
-  requireModule: ['dotenv/config'],
   format: [
     'progress-bar',
     '"html":"reports/cucumber-report.html"',

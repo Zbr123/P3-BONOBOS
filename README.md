@@ -27,7 +27,7 @@ Enterprise-grade Node.js browser automation framework built on **Playwright + Cu
 - **Cucumber BDD** — human-readable feature files for QA/PM/dev alignment.
 - **POM (Page Object Model)** — selectors and UI actions live in one place per screen.
 - **Thin step layer** — steps call page methods, never `page.click` directly.
-- **Centralized helpers** — logger, waits, retries, API, OTP, file utilities.
+- **Centralized helpers** — logger, waits, retries, storefront unlock, browser session.
 - **Allure + HTML reports** — rich, attachable reports with screenshots/traces.
 - **Cursor AI-ready** — descriptive naming, low coupling, clean modules so the AI can extend it safely.
 
@@ -44,50 +44,36 @@ project-root/
 │   └── constants.js     # Paths, tags, timeouts, retry defaults
 │
 ├── features/
-│   ├── login/
-│   │   ├── login.feature
-│   │   ├── login.steps.js
-│   │   └── login.data.js
+│   ├── homepage/        # HP_* home page scenarios
+│   ├── cart/            # CP_* cart / drawer scenarios
 │   └── hooks/
 │       ├── world.js         # Custom Cucumber World
 │       ├── hooks.js         # BeforeAll/Before/AfterStep/After/AfterAll
-│       └── common.steps.js  # Reusable generic steps
+│       └── common.steps.js  # Storefront password gate + shared steps
 │
 ├── pages/
-│   ├── base.page.js     # Click/fill/wait/screenshot wrappers + retry-safe actions
-│   ├── login.page.js
-│   ├── dashboard.page.js
-│   ├── common/
-│   │   ├── header.component.js
-│   │   └── footer.component.js
+│   ├── base.page.js
+│   ├── homepage.page.js
+│   ├── cart.page.js
 │   └── index.js         # barrel export
 │
 ├── helpers/
-│   ├── logger.js        # Winston (console + dated file)
+│   ├── logger.js
 │   ├── utils.js         # sleep, retry, faker data, mask, slugify
-│   ├── api.helper.js    # axios client with interceptors
-│   ├── wait.helper.js   # forVisible/forHidden/forURL/forCondition
-│   ├── file.helper.js   # JSON read/write, fixture loading, screenshot paths
-│   ├── otp.helper.js    # pluggable OTP strategy (mailbox or fixture)
-│   ├── browser.helper.js# session start/stop, screenshot
-│   └── index.js         # barrel export
-│
-├── fixtures/
-│   ├── testData.json    # products, addresses, cards
-│   ├── users.json       # named users
-│   └── otp.json         # offline OTP fallback
+│   ├── wait.helper.js
+│   ├── browser.helper.js
+│   ├── storefront.helper.js
+│   └── index.js
 │
 ├── reports/             # cucumber + allure output (gitignored)
-├── screenshots/         # failure screenshots (gitignored)
-├── videos/              # context videos (gitignored)
-├── traces/              # Playwright traces (gitignored)
-├── logs/                # daily log files (gitignored)
+├── screenshots/
+├── videos/
+├── traces/
+├── logs/
 │
 ├── .env.example
 ├── .gitignore
-├── .eslintrc.js
-├── .prettierrc.js
-├── cucumber.js          # root profile config
+├── cucumber.js
 ├── package.json
 └── README.md
 ```
@@ -100,7 +86,7 @@ project-root/
 - **[Playwright](https://playwright.dev)** + **`@playwright/test`** (for `expect`)
 - **[`playwright-extra`](https://github.com/berstend/puppeteer-extra/tree/master/packages/playwright-extra)** + **`puppeteer-extra-plugin-stealth`**
 - **[`@cucumber/cucumber`](https://github.com/cucumber/cucumber-js)** v10
-- **dotenv**, **axios**, **faker**, **fs-extra**, **winston**
+- **dotenv**, **faker**, **fs-extra**, **winston**
 - **allure-cucumberjs** + **allure-commandline**
 - **ESLint** + **Prettier**
 
@@ -113,7 +99,7 @@ git clone <repo-url> p3-bonobos
 cd p3-bonobos
 
 cp .env.example .env
-# fill in TEST_USERNAME / TEST_PASSWORD / etc.
+# set STORE_PASSWORD for the Shopify password gate (see .env.example)
 
 npm install
 npm run install:browsers      # downloads Chromium
@@ -140,9 +126,7 @@ All env vars are documented in `.env.example`. The framework loads them through 
 | `NAVIGATION_TIMEOUT`      | Nav timeout (ms)                         | `60000`                |
 | `TRACE` / `VIDEO`         | Capture trace / video                    | `false`                |
 | `SCREENSHOT_ON_FAILURE`   | Auto-screenshot on step fail             | `true`                 |
-| `TEST_USERNAME` / `TEST_PASSWORD` | Customer creds                   | —                      |
-| `OTP_EMAIL` / `OTP_PASSWORD` | 2FA mailbox creds                     | —                      |
-| `API_BASE_URL` / `API_TOKEN` | REST helper config                    | —                      |
+| `TEST_USERNAME` / `TEST_PASSWORD` | Optional customer creds            | —                      |
 | `LOG_LEVEL`               | winston log level                        | `info`                 |
 
 ---
@@ -155,7 +139,7 @@ All env vars are documented in `.env.example`. The framework loads them through 
 | `npm run test:headed`   | Headed run (`HEADLESS=false`)                     |
 | `npm run test:smoke`    | `@smoke` tagged scenarios only                    |
 | `npm run test:regression` | `@regression` tagged scenarios only             |
-| `npm run test:login`    | `@login` feature only                             |
+| `npm run test:cart`     | `@cart` cart module scenarios only               |
 | `npm run test:debug`    | Headed + slow-mo + verbose Playwright debug logs  |
 | `npm run test:parallel` | Parallel workers (3 by default)                   |
 | `npm run test:retry`    | Retry failed scenarios once                       |
@@ -169,7 +153,7 @@ You can always drop down to the Playwright/Cucumber CLI directly:
 
 ```bash
 npx cucumber-js -p smoke
-npx cucumber-js features/login --tags "@regression and not @skip"
+npx cucumber-js features/homepage --tags "@regression and not @skip"
 npx playwright show-trace traces/<scenario>-<timestamp>.zip
 ```
 
@@ -209,34 +193,33 @@ module.exports = CartPage;
 
 1. Create `features/<area>/<area>.feature`.
 2. Create `features/<area>/<area>.steps.js` (thin layer; calls page methods + `expect`).
-3. Optional: `features/<area>/<area>.data.js` for fixtures/users.
+3. Optional: `features/<area>/<area>.data.js` for URLs, regex expectations, and labels.
 
 ```gherkin
 @cart @smoke
 Feature: Cart
 
   Scenario: Add a product to the cart
-    Given the customer is on the home page
-    When the customer adds the product "knit_polo" to the cart
-    Then the cart should contain 1 item
+    Given the cart starts empty for this scenario
+    When the customer adds one product to the bag from the home page
+    Then the cart should list at least one line item with image or price context
 ```
 
 ```js
-const { Given, When, Then } = require('@cucumber/cucumber');
+const { When, Then } = require('@cucumber/cucumber');
 const { expect } = require('@playwright/test');
 
-When('the customer adds the product {string} to the cart', async function (key) {
-  const product = require('../../fixtures/testData.json').products[key];
-  const pdp = this.getPage('ProductPage');
-  await pdp.open(product.handle);
-  await pdp.selectSize(product.size);
-  await pdp.addToCart();
+When('the customer adds one product to the bag from the home page', async function () {
+  const cart = this.getPage('CartPage');
+  await cart.openFirstProductPdpFromHome();
+  await cart.clickAddToBagOnPdp();
 });
 
-Then('the cart should contain {int} item(s)', async function (n) {
+Then('the cart should list at least one line item with image or price context', async function () {
   const cart = this.getPage('CartPage');
-  await cart.open();
-  expect(await cart.getItemCount()).toBe(n);
+  await cart.openBagFromHeader();
+  await cart.waitForCartUiOpen();
+  expect(await cart.lineItemsShowProductSignals()).toBe(true);
 });
 ```
 
@@ -281,7 +264,7 @@ The framework writes:
 ## Debugging
 
 - Run **headed** + slow motion: `npm run test:debug`
-- Single feature: `npx cucumber-js features/login`
+- Single feature folder: `npx cucumber-js features/homepage`
 - Single scenario tag: `npx cucumber-js --tags "@smoke and @login"`
 - Open a trace: `npx playwright show-trace traces/<file>.zip`
 - Inspector: `PWDEBUG=1 npx cucumber-js`
@@ -293,7 +276,7 @@ The framework writes:
 This framework is intentionally structured so AI tooling can:
 
 1. **Discover architecture** — barrel exports (`pages/index.js`, `helpers/index.js`) and consistent file naming.
-2. **Generate new pages** — copy `pages/login.page.js` → swap selectors + path.
+2. **Generate new pages** — copy `pages/cart.page.js` → swap selectors + path.
 3. **Generate new steps** — pattern is fixed: `getPage(...)` → page method → `expect`.
 4. **Debug failures fast** — every action logs with a label; failures auto-screenshot and save traces; log files are dated.
 5. **Stay safe** — pages contain no assertions; steps contain no selectors; tests share state through `this.state` only.

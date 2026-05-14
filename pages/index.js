@@ -8,6 +8,5 @@
 module.exports = {
   BasePage: require('./base.page'),
   HomePage: require('./homepage.page'),
-  HeaderComponent: require('./common/header.component'),
-  FooterComponent: require('./common/footer.component'),
+  CartPage: require('./cart.page'),
 };

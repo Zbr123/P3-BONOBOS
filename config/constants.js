@@ -18,7 +18,6 @@ const PATHS = {
   VIDEOS: path.join(ROOT, 'videos'),
   TRACES: path.join(ROOT, 'traces'),
   LOGS: path.join(ROOT, 'logs'),
-  FIXTURES: path.join(ROOT, 'fixtures'),
   DOWNLOADS: path.join(ROOT, 'downloads'),
   STATE: path.join(ROOT, 'state'),
 };

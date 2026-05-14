@@ -617,9 +617,10 @@ Then(
 // ---------- HP_038 ----------
 
 Then(
-  'a sample of internal footer links should load without errors',
+  'each configured internal footer link should navigate or behave correctly',
+  { timeout: 900_000 },
   async function () {
     const home = this.getPage('HomePage');
-    await home.verifySampleInternalFooterLinksHealthy(3);
+    await home.verifyConfiguredInternalFooterLinks();
   }
 );

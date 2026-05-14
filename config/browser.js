@@ -29,19 +29,25 @@ chromiumExtra.use(StealthPlugin());
 function getLaunchOptions() {
   const w = env.VIEWPORT_WIDTH;
   const h = env.VIEWPORT_HEIGHT;
+  const useFullWindow = !env.HEADLESS && env.FULL_WINDOW;
+
   const args = [
     '--disable-blink-features=AutomationControlled',
     '--disable-dev-shm-usage',
     '--no-sandbox',
     '--disable-features=IsolateOrigins,site-per-process',
-    // Headed: keep outer window aligned with viewport so layout breakpoints stay stable.
-    `--window-size=${w},${h}`,
-    '--window-position=0,0',
   ];
+
+  if (useFullWindow) {
+    // Headed + full window: let the page use the real window size (matches viewport: null).
+    args.push('--start-maximized');
+  } else {
+    args.push(`--window-size=${w},${h}`, '--window-position=0,0');
+  }
 
   /** @type {import('playwright').LaunchOptions} */
   const options = {
-    headless: env.HEADLESS,
+    headless: env.HEADLESS === true,
     slowMo: env.SLOW_MO,
     args,
     timeout: env.NAVIGATION_TIMEOUT,
@@ -62,17 +68,23 @@ function getContextOptions() {
   }
   fs.ensureDirSync(PATHS.DOWNLOADS);
 
+  const useFullWindow = !env.HEADLESS && env.FULL_WINDOW;
+
   /** @type {import('playwright').BrowserContextOptions} */
   const options = {
-    viewport: {
-      width: env.VIEWPORT_WIDTH,
-      height: env.VIEWPORT_HEIGHT,
-    },
-    screen: {
-      width: env.VIEWPORT_WIDTH,
-      height: env.VIEWPORT_HEIGHT,
-    },
-    deviceScaleFactor: 1,
+    ...(useFullWindow
+      ? { viewport: null }
+      : {
+          viewport: {
+            width: env.VIEWPORT_WIDTH,
+            height: env.VIEWPORT_HEIGHT,
+          },
+          screen: {
+            width: env.VIEWPORT_WIDTH,
+            height: env.VIEWPORT_HEIGHT,
+          },
+          deviceScaleFactor: 1,
+        }),
     acceptDownloads: true,
     ignoreHTTPSErrors: true,
     userAgent:
@@ -95,7 +107,10 @@ function getContextOptions() {
   if (env.VIDEO) {
     options.recordVideo = {
       dir: PATHS.VIDEOS,
-      size: { width: env.VIEWPORT_WIDTH, height: env.VIEWPORT_HEIGHT },
+      size: {
+        width: useFullWindow ? 1920 : env.VIEWPORT_WIDTH,
+        height: useFullWindow ? 1080 : env.VIEWPORT_HEIGHT,
+      },
     };
   }
 

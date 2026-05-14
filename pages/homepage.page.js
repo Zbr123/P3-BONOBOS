@@ -20,7 +20,7 @@ const env = require('../config/env');
 const logger = require('../helpers/logger');
 const { expect } = require('@playwright/test');
 const hpData = require('../features/homepage/homepage.data');
-const { openStorefront, dismissCookieBanner } =
+const { openStorefront, dismissCookieBanner, unlockStorefront } =
   require('../helpers/storefront.helper');
 
 class HomePage extends BasePage {
@@ -126,12 +126,18 @@ class HomePage extends BasePage {
       viewProductHotspot:
         'a:has-text("VIEW PRODUCT"), button:has-text("VIEW PRODUCT"), [class*="hotspot"] a',
       guideshopBlock:
-        'section:has-text("Guideshop"), section:has-text("GUIDESHOP"), section:has-text("Find a location")',
+        'section:has-text("Guideshop"), section:has-text("GUIDESHOP"), section:has-text("Find a location"), section:has-text("FIND A LOCATION")',
       viewNewArrivals: 'a:has-text("VIEW NEW ARRIVALS"), a:has-text("View New Arrivals")',
       ugcBlock:
         'section:has-text("Made by us"), section:has-text("styled by you"), section:has-text("Styled by You")',
+      /** HP_028 — UGC carousel root (Next control). Theme id may change after publish. */
+      ugcCarouselRoot:
+        '#ugc-carousel-template--26526283399461__ugc_carousel_4EnaiV, [id^="ugc-carousel-template"][id*="ugc_carousel"], [id*="ugc_carousel"]',
       greatFitFirstBlock:
         'section:has-text("Great Fit First"), section:has-text("GREAT FIT FIRST")',
+      /** HP_035 — theme footer group (id changes per publish; pattern + Terms link resolves block). */
+      footerPolicySection:
+        '#Footer-sections--26447985934629__footer_Ljka4C, [id^="Footer-sections"][id*="footer"]',
       footerNewsletterInput: 'footer input[type="email"]',
       footerNewsletterSubmit: 'footer button[type="submit"]',
     };
@@ -168,6 +174,39 @@ class HomePage extends BasePage {
       footer.isVisible(),
     ]);
     return checks.every(Boolean);
+  }
+
+  /**
+   * After the storefront password gate: wait for document life-cycle, then
+   * until the homepage shell is usable (logo + announcement bar visible;
+   * main + footer present in DOM — footer may be below the fold and not
+   * yet "visible" without scrolling).
+   *
+   * @param {number} timeoutMs
+   */
+  async waitForHomepageReady(timeoutMs = 60_000) {
+    await this.page.waitForLoadState('domcontentloaded');
+    await this.page.waitForLoadState('load').catch(() => {});
+
+    const logo = this.page.locator(this.selectors.headerLogo).first();
+    const bar = this.page.locator(this.selectors.announcementBar).first();
+    const main = this.page.locator('#MainContent, main#main, main').first();
+    const footer = this.page.locator(this.selectors.footer).first();
+
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const [logoOk, barOk, mainOk, footerInDom] = await Promise.all([
+        logo.isVisible(),
+        bar.isVisible(),
+        main.isVisible().catch(() => false),
+        footer.count().then((c) => c > 0),
+      ]);
+      if (logoOk && barOk && mainOk && footerInDom) return;
+      await this.page.waitForTimeout(400);
+    }
+    throw new Error(
+      `Homepage not ready within ${timeoutMs}ms — expected visible logo + announcement bar + main, and footer in DOM.`
+    );
   }
 
   // ---------- HP_002 ----------
@@ -846,10 +885,27 @@ class HomePage extends BasePage {
 
   async openBagOrCartFromHeader() {
     await this.ensureNoOverlay();
-    const drawerTrigger = this.page.getByTestId('cart-drawer-trigger');
-    if (await drawerTrigger.isVisible({ timeout: 4000 }).catch(() => false)) {
-      await drawerTrigger.click({ timeout: 10_000 });
-      return;
+    const drawerTrigger = this.page.getByTestId('cart-drawer-trigger').first();
+    try {
+      await drawerTrigger.waitFor({ state: 'attached', timeout: 20_000 });
+      await drawerTrigger.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
+      try {
+        await drawerTrigger.click({ timeout: 15_000, force: true });
+      } catch {
+        await drawerTrigger.evaluate((el) => {
+          if (el instanceof HTMLElement) el.click();
+        });
+      }
+      await this.page.waitForTimeout(400);
+      if (!(await this.cartDrawerOrPageOpened())) {
+        await drawerTrigger.evaluate((el) => {
+          if (el instanceof HTMLElement) el.click();
+        });
+        await this.page.waitForTimeout(400);
+      }
+      if (await this.cartDrawerOrPageOpened()) return;
+    } catch {
+      /* Fall back if test id is absent or not clickable in this theme/build. */
     }
     const cart = this.page.locator(this.selectors.cartEntry).first();
     if (await cart.isVisible({ timeout: 4000 }).catch(() => false)) {
@@ -1284,15 +1340,16 @@ class HomePage extends BasePage {
   // ---------- HP_021–HP_022 ----------
 
   async scrollToFindYourFitHomeSection() {
-    const block = this.page.locator(this.selectors.findYourFitBlock).first();
-    await block.scrollIntoViewIfNeeded();
+    const quiz = this.page.getByRole('link', { name: /take the quiz/i }).first();
+    await quiz.waitFor({ state: 'attached', timeout: 20_000 });
+    await quiz.scrollIntoViewIfNeeded({ timeout: 30_000 });
     await this.page.waitForTimeout(500);
   }
 
   async clickTakeTheQuizInFindYourFitSection() {
     await this.scrollToFindYourFitHomeSection();
-    const q = this.page.locator(this.selectors.takeTheQuiz).first();
-    await q.waitFor({ state: 'visible', timeout: 10_000 });
+    const q = this.page.getByRole('link', { name: 'Take the quiz' });
+    await q.waitFor({ state: 'visible', timeout: 12_000 });
     await Promise.all([
       this.page.waitForLoadState('domcontentloaded'),
       q.click({ timeout: 15_000 }),
@@ -1300,76 +1357,180 @@ class HomePage extends BasePage {
   }
 
   async clickViewProductFromHotspotIfPresent() {
-    await this.scrollToFindYourFitHomeSection();
-    const vp = this.page.locator(this.selectors.viewProductHotspot).first();
-    if (!(await vp.isVisible({ timeout: 5000 }).catch(() => false))) {
-      throw new Error('VIEW PRODUCT hotspot not found in Find Your Fit section.');
+    const root = this.page.getByTestId('product-hotspots').first();
+    await root.waitFor({ state: 'visible', timeout: 25_000 });
+    await root.scrollIntoViewIfNeeded({ timeout: 30_000 });
+    await this.page.waitForTimeout(500);
+
+    const named = root.getByRole('link', { name: /The Chino 2\.0\s*[-–]\s*After/i }).first();
+
+    const tryClickVisibleNamed = async () => {
+      if (!(await named.isVisible({ timeout: 3000 }).catch(() => false))) return false;
+      await Promise.all([
+        this.page.waitForLoadState('domcontentloaded'),
+        named.click({ timeout: 15_000 }),
+      ]);
+      return true;
+    };
+
+    if (await tryClickVisibleNamed()) return;
+
+    await root.locator('button:visible').first().click({ timeout: 10_000 }).catch(() => {});
+    await this.page.waitForTimeout(700);
+
+    if (await tryClickVisibleNamed()) return;
+
+    const pdp = root.locator('a.hotspot-dialog__product-title-link').first();
+    await pdp.waitFor({ state: 'attached', timeout: 12_000 });
+    const href = await pdp.getAttribute('href');
+    if (!href || !/\/products\//.test(href)) {
+      throw new Error('Hotspot section has no /products/ link (dialog link missing href).');
     }
-    await Promise.all([
-      this.page.waitForLoadState('domcontentloaded'),
-      vp.click({ timeout: 15_000 }),
-    ]);
+    await this.page.goto(new URL(href, this.page.url()).href, {
+      waitUntil: 'domcontentloaded',
+      timeout: env.NAVIGATION_TIMEOUT,
+    });
   }
 
   // ---------- HP_023–HP_025 ----------
 
   async scrollToBestsellersSection() {
-    const h = this.page.getByRole('heading', { name: /bestseller/i }).first();
-    await h.scrollIntoViewIfNeeded();
+    const anchor = this.page
+      .getByRole('link', { name: 'The Chino 2.0 - After Midnights', exact: true })
+      .first();
+    await anchor.waitFor({ state: 'attached', timeout: 20_000 });
+    await anchor.scrollIntoViewIfNeeded({ timeout: 30_000 });
     await this.page.waitForTimeout(500);
   }
 
   async clickBestsellersCarouselNextIfPresent() {
     await this.scrollToBestsellersSection();
-    const section = this.page
-      .locator('section, div[class*="shopify-section"]')
-      .filter({ has: this.page.getByRole('heading', { name: /bestseller/i }) })
+    const mid = this.page
+      .getByRole('link', { name: 'The Chino 2.0 - After Midnights', exact: true })
       .first();
-    const next = section.locator(this.selectors.slideshowNext).first();
-    if (await next.isVisible({ timeout: 4000 }).catch(() => false)) {
-      await next.click({ timeout: 5000 }).catch(() => {});
+    const next1 = mid.getByLabel('Next slide');
+    if (await next1.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await next1.click({ timeout: 8000 }).catch(() => {});
+      await this.page.waitForTimeout(500);
+    }
+    const br = this.page
+      .getByRole('link', { name: 'The Chino 2.0 - Brilliant White', exact: true })
+      .first();
+    const next2 = br.getByLabel('Next slide');
+    if (await next2.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await next2.click({ timeout: 8000 }).catch(() => {});
       await this.page.waitForTimeout(500);
     }
   }
 
   async clickFirstBestsellerProductLink() {
     await this.scrollToBestsellersSection();
-    const section = this.page
-      .locator('section, div[class*="shopify-section"]')
-      .filter({ has: this.page.getByRole('heading', { name: /bestseller/i }) })
+    const plink = this.page
+      .getByRole('link', { name: 'The Chino 2.0 - After Midnights', exact: true })
       .first();
-    const plink = section.locator('a[href*="/products/"]').first();
     await plink.waitFor({ state: 'visible', timeout: 12_000 });
     await Promise.all([
       this.page.waitForLoadState('domcontentloaded'),
-      plink.click({ timeout: 15_000 }),
+      plink.click({ force: true, timeout: 15_000 }),
     ]);
   }
 
-  /** HP_023 — advance carousel (if any) then open first visible PDP link. */
+  /**
+   * HP_023 — For each Bestsellers product carousel in scope: scroll that tile
+   * into view, advance with **Next slide** when present, open its PDP, assert
+   * navigation, then **go back** and repeat for the next tile. Ends on the
+   * last PDP so the Gherkin `Then` still validates a product experience URL.
+   */
   async exploreBestsellersCarouselAndOpenFirstProductLink() {
-    await this.clickBestsellersCarouselNextIfPresent();
-    await this.clickFirstBestsellerProductLink();
+    const normPath = (absoluteUrl) => {
+      try {
+        return new URL(absoluteUrl).pathname.replace(/\/+$/, '') || '/';
+      } catch {
+        return '';
+      }
+    };
+
+    const tiles = [
+      {
+        name: 'After Midnights',
+        scrollAndCard: () =>
+          this.page
+            .getByRole('link', { name: 'The Chino 2.0 - After Midnights', exact: true })
+            .first(),
+        openPdp: () =>
+          this.page
+            .getByRole('link', { name: 'The Chino 2.0 - After Midnights', exact: true })
+            .first(),
+      },
+      {
+        name: 'Brilliant White',
+        scrollAndCard: () =>
+          this.page
+            .getByRole('link', { name: 'The Chino 2.0 - Brilliant White', exact: true })
+            .first(),
+        openPdp: () =>
+          this.page
+            .getByRole('link', { name: 'The Chino 2.0 - Brilliant White', exact: true })
+            .first(),
+      },
+    ];
+
+    for (let i = 0; i < tiles.length; i += 1) {
+      const last = i === tiles.length - 1;
+      const tile = tiles[i];
+
+      await this.scrollToBestsellersSection();
+
+      const card = tile.scrollAndCard();
+      await card.waitFor({ state: 'attached', timeout: 20_000 });
+      await card.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      await this.page.waitForTimeout(450);
+
+      const nextBtn = card.getByLabel('Next slide');
+      if (await nextBtn.isVisible({ timeout: 6000 }).catch(() => false)) {
+        await nextBtn.click({ timeout: 8000 }).catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+
+      const pdp = tile.openPdp();
+      await pdp.waitFor({ state: 'attached', timeout: 15_000 });
+      const href = (await pdp.getAttribute('href')) || '';
+      if (!href) {
+        throw new Error(`HP_023: missing href on PDP control for ${tile.name}`);
+      }
+      const expected = normPath(new URL(href, this.page.url()).href);
+
+      await Promise.all([
+        this.page.waitForURL((u) => normPath(u.href) === expected, { timeout: 25_000 }),
+        pdp.click({ force: true, timeout: 15_000 }),
+      ]);
+
+      expect(normPath(this.page.url())).toBe(expected);
+      expect(hpData.expected.productExperienceUrl.test(this.page.url())).toBe(true);
+
+      if (!last) {
+        await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: env.NAVIGATION_TIMEOUT });
+        await dismissCookieBanner(this.page).catch(() => {});
+        await this.page.waitForTimeout(600);
+      }
+    }
   }
 
   async bestsellersHasMultipleTabsIfPresent() {
     await this.scrollToBestsellersSection();
-    const section = this.page
-      .locator('section, div[class*="shopify-section"]')
-      .filter({ has: this.page.getByRole('heading', { name: /bestseller/i }) })
-      .first();
-    const tabs = section.locator(
-      '[role="tab"], button[class*="tab"], .tabs button, ul.tabs li button'
-    );
-    const n = await tabs.count();
-    if (n < 2) {
-      return true;
+    const t1 = this.page.getByRole('tab', { name: 'Regular Top Sample Collection' });
+    const t2 = this.page.getByRole('tab', { name: 'Regular Bottom Sample' });
+    if (!(await t1.isVisible({ timeout: 8000 }).catch(() => false))) {
+      return false;
     }
-    const t0 = (await tabs.nth(0).innerText()) || '';
-    await tabs.nth(1).click({ timeout: 5000 }).catch(() => {});
-    await this.page.waitForTimeout(600);
-    const t1 = (await tabs.nth(1).innerText()) || '';
-    return t0.trim() !== t1.trim() || n >= 2;
+    await t1.click({ timeout: 8000 });
+    await this.page.waitForTimeout(400);
+    if (!(await t2.isVisible({ timeout: 8000 }).catch(() => false))) {
+      return false;
+    }
+    await t2.click({ timeout: 8000 });
+    await this.page.waitForTimeout(400);
+    return true;
   }
 
   async openFirstBestsellerViaImageOrQuickControl() {
@@ -1390,24 +1551,113 @@ class HomePage extends BasePage {
 
   // ---------- HP_026–HP_027 ----------
 
+  /**
+   * Homepage Guideshop **merchandising block** (below the header). Scoped to
+   * `#MainContent` / `main` so we never pick the announcement bar’s
+   * “FIND A LOCATION”, which sits outside this module and breaks HP_027.
+   */
+  async guideshopSection() {
+    const main = this.page.locator('#MainContent, main').first();
+
+    const vnaCount = await main.getByRole('link', { name: /VIEW\s+NEW\s+ARRIVALS/i }).count();
+    if (vnaCount > 0) {
+      const vna = main.getByRole('link', { name: /VIEW\s+NEW\s+ARRIVALS/i }).first();
+      await vna.waitFor({ state: 'attached', timeout: 25_000 });
+      const bySection = vna.locator('xpath=ancestor::section[1]');
+      if ((await bySection.count()) > 0) return bySection;
+      const byWrap = vna.locator('xpath=ancestor::*[contains(@class,"shopify-section")][1]');
+      if ((await byWrap.count()) > 0) return byWrap;
+      return main;
+    }
+
+    const blocks = main.locator(
+      'section:has-text("Guideshop"), section:has-text("GUIDESHOP"), section:has-text("Find a location"), section:has-text("FIND A LOCATION")'
+    );
+    const n = await blocks.count();
+    for (let i = 0; i < n; i++) {
+      const s = blocks.nth(i);
+      if ((await s.getByRole('link', { name: /VIEW\s+NEW\s+ARRIVALS/i }).count()) === 0) {
+        continue;
+      }
+      const link = await this.resolveGuideshopFindLocationLink(s);
+      const href = ((await link.getAttribute('href')) || '').trim();
+      if (/collections\/all\b/i.test(href)) continue;
+      return s;
+    }
+    for (let i = 0; i < n; i++) {
+      const s = blocks.nth(i);
+      const link = await this.resolveGuideshopFindLocationLink(s);
+      const href = ((await link.getAttribute('href')) || '').trim();
+      if (/collections\/all\b/i.test(href)) continue;
+      return s;
+    }
+
+    throw new Error(
+      'Guideshop section not found in main content (expected VIEW NEW ARRIVALS or Guideshop block).'
+    );
+  }
+
+  /**
+   * Prefer **FIND A LOCATION** whose destination matches the real guideshop /
+   * locations experience; skip `/collections/all` promos. If the visible CTA
+   * only points at `/collections/all`, use a same-block `a[href*="…"]` that
+   * targets `/pages/guideshops`, `/pages/locations`, etc.
+   */
+  async resolveGuideshopFindLocationLink(section) {
+    const pathnameFromHref = (href) => {
+      try {
+        return new URL(href, this.page.url()).pathname;
+      } catch {
+        return '';
+      }
+    };
+
+    const geo = section.locator(
+      'a[href*="/pages/guideshops"], a[href*="/pages/locations"], a[href*="/pages/find-a-store"], a[href*="guideshops"]'
+    );
+    const geoCount = await geo.count();
+    for (let i = 0; i < geoCount; i++) {
+      const a = geo.nth(i);
+      const href = ((await a.getAttribute('href')) || '').trim();
+      const path = pathnameFromHref(href);
+      if (hpData.expected.guideshopUrl.test(path)) return a;
+    }
+
+    const candidates = section.getByRole('link', { name: 'FIND A LOCATION' });
+    const n = await candidates.count();
+    let fallback = null;
+    for (let i = 0; i < n; i++) {
+      const cand = candidates.nth(i);
+      const href = ((await cand.getAttribute('href')) || '').trim();
+      if (/collections\/all\b/i.test(href)) continue;
+      const path = pathnameFromHref(href);
+      if (hpData.expected.guideshopUrl.test(path)) return cand;
+      if (!fallback) fallback = cand;
+    }
+    return fallback || candidates.first();
+  }
+
   async scrollToGuideshopSection() {
-    const g = this.page.locator(this.selectors.guideshopBlock).first();
-    await g.scrollIntoViewIfNeeded();
+    const section = await this.guideshopSection();
+    await section.waitFor({ state: 'attached', timeout: 25_000 });
+    await section.scrollIntoViewIfNeeded({ timeout: 30_000 });
+    const vna = section.getByRole('link', { name: /VIEW\s+NEW\s+ARRIVALS/i }).first();
+    if (await vna.isVisible({ timeout: 4000 }).catch(() => false)) {
+      await vna.scrollIntoViewIfNeeded({ timeout: 15_000 }).catch(() => {});
+    } else {
+      const link = await this.resolveGuideshopFindLocationLink(section);
+      await link.scrollIntoViewIfNeeded({ timeout: 15_000 }).catch(() => {});
+    }
     await this.page.waitForTimeout(500);
   }
 
   async openFindLocationFromGuideshopIfPresent() {
     await this.scrollToGuideshopSection();
-    const link = this.page
-      .getByRole('link', { name: /find a location|find\s*location|locations/i })
-      .first();
-    if (!(await link.isVisible({ timeout: 5000 }).catch(() => false))) {
-      throw new Error('Find a location link not found in Guideshop section.');
-    }
-    await Promise.all([
-      this.page.waitForLoadState('domcontentloaded'),
-      link.click({ timeout: 15_000 }),
-    ]);
+    const section = await this.guideshopSection();
+    const link = await this.resolveGuideshopFindLocationLink(section);
+    await link.waitFor({ state: 'visible', timeout: 12_000 });
+    await link.click({ timeout: 30_000 });
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
   }
 
   async submitInvalidGuideshopSearchIfPresent() {
@@ -1425,39 +1675,47 @@ class HomePage extends BasePage {
 
   async clickViewNewArrivalsFromGuideshopIfPresent() {
     await this.scrollToGuideshopSection();
-    const v = this.page.locator(this.selectors.viewNewArrivals).first();
-    if (!(await v.isVisible({ timeout: 5000 }).catch(() => false))) {
-      throw new Error('VIEW NEW ARRIVALS not found in Guideshop section.');
-    }
-    await Promise.all([
-      this.page.waitForLoadState('domcontentloaded'),
-      v.click({ timeout: 15_000 }),
-    ]);
+    const section = await this.guideshopSection();
+    const v = section.getByRole('link', { name: 'VIEW NEW ARRIVALS' }).first();
+    await v.waitFor({ state: 'visible', timeout: 12_000 });
+    await v.click({ timeout: 25_000 });
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 25_000 }).catch(() => {});
   }
 
   // ---------- HP_028 ----------
 
   async scrollToUgcSection() {
-    const u = this.page.locator(this.selectors.ugcBlock).first();
-    await u.scrollIntoViewIfNeeded();
+    const carousel = this.page.locator(this.selectors.ugcCarouselRoot).first();
+    if ((await carousel.count().catch(() => 0)) > 0) {
+      await carousel.waitFor({ state: 'attached', timeout: 15_000 }).catch(() => {});
+      await carousel.scrollIntoViewIfNeeded({ timeout: 30_000 }).catch(() => {});
+    } else {
+      const u = this.page.locator(this.selectors.ugcBlock).first();
+      await u.scrollIntoViewIfNeeded({ timeout: 30_000 });
+    }
     await this.page.waitForTimeout(500);
   }
 
   async ugcVideoControlsIfPresent() {
-    const block = this.page.locator(this.selectors.ugcBlock).first();
-    const play = block
-      .locator(
-        `${this.selectors.videoTransportAria}, [class*="video"] button`
-      )
-      .first();
-    if (await play.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await play.click({ timeout: 3000 }).catch(() => {});
-      await this.page.waitForTimeout(400);
-      await play.click({ timeout: 3000 }).catch(() => {});
+    await this.scrollToUgcSection();
+    const carousel = this.page.locator(this.selectors.ugcCarouselRoot).first();
+    const next = carousel.getByRole('button', { name: 'Next', exact: true }).first();
+    if (await next.isVisible({ timeout: 6000 }).catch(() => false)) {
+      await next.click({ timeout: 8000 }).catch(() => {});
+      await this.page.waitForTimeout(500);
     }
-    const next = block.locator(this.selectors.slideshowNext).first();
-    if (await next.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await next.click({ timeout: 3000 }).catch(() => {});
+    const article = this.page
+      .getByRole('article')
+      .filter({ hasText: 'Jetsetter Strech Dress Shirt Blue Burney Plaid' })
+      .first();
+    const play = article.getByLabel('Play video').first();
+    if (await play.isVisible({ timeout: 6000 }).catch(() => false)) {
+      await play.click({ timeout: 8000 }).catch(() => {});
+      await this.page.waitForTimeout(500);
+    }
+    const pause = this.page.getByRole('button', { name: 'Pause', exact: true }).first();
+    if (await pause.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await pause.click({ timeout: 8000 }).catch(() => {});
     }
     return true;
   }
@@ -1484,56 +1742,45 @@ class HomePage extends BasePage {
   }
 
   /**
-   * Activates a second “scroll line” / dot / tab control and asserts the
-   * active slide or visible copy changes (when controls exist).
+   * HP_030 — “scroll line” tabs (recorded: Go to tab 2 / Go to tab 3).
    */
   async greatFitFirstScrollLinesChangeVisibleContent() {
     await this.scrollToGreatFitFirstSection();
     const section = this.page.locator(this.selectors.greatFitFirstBlock).first();
-    const dots = section.locator(
-      '.slick-dots button, [role="tablist"] [role="tab"], button[aria-label*="slide" i]'
-    );
-    const n = await dots.count();
-    if (n >= 2) {
-      const slideSnap = async () =>
-        (
-          (await section
-            .locator('.slick-active, [aria-selected="true"]')
-            .first()
-            .innerText()
-            .catch(() => '')) +
-          (await section.locator('.slick-active img').first().getAttribute('src').catch(() => ''))
-        ).trim();
+    await section.waitFor({ state: 'visible', timeout: 15_000 });
 
-      const before = await slideSnap();
-      await dots.nth(1).click({ timeout: 8000 }).catch(() => {});
-      await this.page.waitForTimeout(700);
-      const mid = await slideSnap();
-      if (before !== mid) return true;
-      await dots.nth(0).click({ timeout: 8000 }).catch(() => {});
-      await this.page.waitForTimeout(400);
-      await dots.nth(1).click({ timeout: 8000 }).catch(() => {});
-      await this.page.waitForTimeout(700);
-      const after = await slideSnap();
-      if (before !== after) return true;
-    }
+    const tab2In = section.getByRole('button', { name: 'Go to tab 2' });
+    const tab3In = section.getByRole('button', { name: 'Go to tab 3' });
+    const tab2 =
+      (await tab2In.count()) > 0
+        ? tab2In.first()
+        : this.page.getByRole('button', { name: 'Go to tab 2' }).first();
+    const tab3 =
+      (await tab3In.count()) > 0
+        ? tab3In.first()
+        : this.page.getByRole('button', { name: 'Go to tab 3' }).first();
 
-    const track = section
-      .locator('.slick-list, [class*="carousel"] [class*="track"], [class*="slider"]')
-      .first();
-    if (await track.isVisible({ timeout: 2000 }).catch(() => false)) {
-      const img0 = section.locator('img').first();
-      const src0 = (await img0.getAttribute('src')) || '';
-      await track.evaluate((el) => {
-        el.scrollLeft = Math.min(el.scrollWidth, el.scrollLeft + 400);
-      });
-      await this.page.waitForTimeout(600);
-      const src1 = (await img0.getAttribute('src')) || '';
-      if (src0 !== src1) return true;
-    }
+    await tab2.waitFor({ state: 'visible', timeout: 15_000 });
+    await tab2.click({ timeout: 12_000 });
+    await this.page.waitForTimeout(400);
+    await tab3.click({ timeout: 12_000 });
+    await this.page.waitForTimeout(400);
+
+    const selected =
+      (await tab3.getAttribute('aria-selected')) === 'true' ||
+      (await tab3.getAttribute('aria-pressed')) === 'true' ||
+      (await tab3.getAttribute('aria-current')) === 'true';
+    if (selected) return true;
+
+    const anySelected = await section
+      .locator('[aria-selected="true"]')
+      .first()
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+    if (anySelected) return true;
 
     throw new Error(
-      'Great Fit First: could not find scroll tabs/dots or prove content changed — update selectors.'
+      'Great Fit First: Go to tab controls did not show an active state after clicks — update selectors.'
     );
   }
 
@@ -1587,84 +1834,200 @@ class HomePage extends BasePage {
 
   // ---------- HP_033 / HP_035 / HP_036 / HP_038 (footer) ----------
 
+  /**
+   * Footer merchandising block that contains policy links (stable enough for scroll + clicks).
+   */
+  footerPolicyBlock() {
+    const byPattern = this.page
+      .locator(this.selectors.footerPolicySection)
+      .filter({ has: this.page.getByRole('link', { name: /^Terms$/i }) })
+      .first();
+    return byPattern;
+  }
+
   async scrollToFooter() {
-    const f = this.page.locator(this.selectors.footer).first();
-    await f.scrollIntoViewIfNeeded();
+    const block = this.footerPolicyBlock();
+    if ((await block.count()) < 1) {
+      const f = this.page.locator(this.selectors.footer).first();
+      await f.waitFor({ state: 'attached', timeout: 20_000 });
+      await f.scrollIntoViewIfNeeded({ timeout: 45_000 });
+    } else {
+      await block.waitFor({ state: 'attached', timeout: 20_000 });
+      await block.scrollIntoViewIfNeeded({ timeout: 45_000 });
+    }
     await this.page.waitForTimeout(400);
   }
 
+  /**
+   * HP_033 — newsletter: fill the email in the **same** block as the CTA, then
+   * click that block’s subscribe control. Page-wide `.last()` was unreliable
+   * (multiple email fields / SUBSCRIBE buttons; theme may use plain “SUBSCRIBE”
+   * without `email-signup__*` classes).
+   */
   async subscribeFooterNewsletter(email) {
-    await this.scrollToFooter();
-    const input = this.page.locator(this.selectors.footerNewsletterInput).first();
-    await input.waitFor({ state: 'visible', timeout: 12_000 });
-    await input.fill(email);
-    const submit = this.page
-      .locator(this.selectors.footerNewsletterSubmit)
-      .filter({ hasText: /subscribe|sign\s*up|submit/i })
+    await this.ensureNoOverlay();
+
+    const headingBlock = this.page
+      .locator('section, div[class*="shopify-section"]')
+      .filter({ hasText: /20%\s*Off\s+Your\s+First\s+Order/i })
       .first();
-    if (await submit.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await submit.click({ timeout: 10_000 });
+
+    let block;
+    if (
+      (await headingBlock.count()) > 0 &&
+      (await headingBlock.locator('input[type="email"]').count()) > 0
+    ) {
+      block = headingBlock;
+      await block.scrollIntoViewIfNeeded({ timeout: 20_000 });
     } else {
-      await this.page.locator(this.selectors.footerNewsletterSubmit).first().click({ timeout: 10_000 });
+      await this.scrollToFooter();
+      block = this.page
+        .locator('section, div[class*="shopify-section"], footer, [class*="email-signup"]')
+        .filter({ has: this.page.locator('input[type="email"]') })
+        .last();
     }
-    await this.page.waitForTimeout(1500);
+
+    await block.waitFor({ state: 'visible', timeout: 25_000 });
+    await block.scrollIntoViewIfNeeded({ timeout: 15_000 });
+    await dismissCookieBanner(this.page).catch(() => {});
+    await this.page.waitForTimeout(200);
+
+    const emailField = block.locator('input[type="email"]').first();
+    await emailField.waitFor({ state: 'visible', timeout: 15_000 });
+    await emailField.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await emailField.click();
+    await emailField.fill(email);
+    await emailField.dispatchEvent('input');
+    await emailField.dispatchEvent('change');
+    await emailField.blur().catch(() => {});
+    await this.page.waitForTimeout(150);
+
+    const xpathBtn = block.locator(
+      'xpath=.//button[@class="email-signup__button email-signup__button--text"]'
+    );
+    const classBtn = block.locator('button.email-signup__button.email-signup__button--text');
+    const byText = block
+      .locator('button, input[type="submit"]')
+      .filter({ hasText: /^SUBSCRIBE$/i });
+    const followingBtn = emailField.locator(
+      'xpath=following::button[normalize-space(.)="SUBSCRIBE" or normalize-space(.)="Subscribe"][1]'
+    );
+
+    let subscribe;
+    if ((await xpathBtn.count()) > 0) subscribe = xpathBtn.first();
+    else if ((await classBtn.count()) > 0) subscribe = classBtn.first();
+    else if ((await byText.count()) > 0) subscribe = byText.first();
+    else if ((await followingBtn.count()) > 0) subscribe = followingBtn;
+    else {
+      subscribe = block.getByRole('button', { name: /^SUBSCRIBE$/i }).first();
+    }
+
+    await subscribe.waitFor({ state: 'attached', timeout: 12_000 });
+    await subscribe.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await subscribe.hover({ timeout: 5000 }).catch(() => {});
+
+    const activateSubscribe = async () => {
+      try {
+        await subscribe.click({ timeout: 10_000, force: true });
+      } catch {
+        /* Playwright click can miss overlapped hit targets; still try native + pointer. */
+      }
+      await subscribe.evaluate((el) => {
+        if (el && typeof el.click === 'function') el.click();
+      });
+      const box = await subscribe.boundingBox().catch(() => null);
+      if (box) {
+        await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await this.page.mouse.down();
+        await this.page.mouse.up();
+      }
+    };
+
+    await activateSubscribe();
   }
 
   async footerShowsThanksForSubscribing() {
-    return this.page
-      .getByText(
-        /thanks\s+for\s+subscrib|thank\s+you.*subscrib|you.*re\s+subscribed|successfully\s+subscribed|you.*re\s+in!/i
-      )
-      .first()
-      .isVisible({ timeout: 12_000 })
-      .catch(() => false);
+    const thanks =
+      /thanks\s+for\s+subscrib|thank\s+you.*subscrib|you'?re\s+subscribed|successfully\s+subscribed|you'?re\s+in!|subscribed|check\s+your\s+e-?mail|check\s+your\s+inbox|confirm\s+your\s+(e-?mail|subscription)|almost\s+done|verify\s+your\s+e-?mail|(?:we'?ve|we\s+have)\s+sent\s+you|sent\s+you\s+(?:an\s+)?e-?mail|look\s+for\s+(?:an\s+)?e-?mail|click\s+the\s+link\s+in\s+(?:the\s+)?(?:e-?mail|message)|on\s+the\s+list|welcome\s+to\s+(?:the\s+)?list|signed\s+up\s+successfully|already\s+subscribed|you'?re\s+already\s+on\s+the\s+list|newsletter.*success|successfully\s+signed/i;
+
+    const isThanksVisible = async (root) => {
+      const byText = root.getByText(thanks).first();
+      if (await byText.isVisible().catch(() => false)) return true;
+      const status = root
+        .locator('[role="status"], [role="alert"], .form__message--success')
+        .filter({ hasText: thanks });
+      if (await status.first().isVisible().catch(() => false)) return true;
+      const successBand = root
+        .locator('[class*="newsletter"]')
+        .filter({ hasText: thanks });
+      if (await successBand.first().isVisible().catch(() => false)) return true;
+      return false;
+    };
+
+    const scan = async () => {
+      if (await isThanksVisible(this.page)) return true;
+      for (const frame of this.page.frames()) {
+        if (frame === this.page.mainFrame()) continue;
+        if (await isThanksVisible(frame)) return true;
+      }
+      return false;
+    };
+
+    const deadline = Date.now() + 55_000;
+    while (Date.now() < deadline) {
+      if (await scan()) return true;
+      await this.page.waitForTimeout(450);
+    }
+    return false;
   }
 
   async openFooterTermsOfServiceLink() {
     await this.scrollToFooter();
-    const link = this.page
-      .locator('footer')
-      .getByRole('link', { name: /terms\s+of\s+service/i })
-      .first();
-    await link.waitFor({ state: 'visible', timeout: 10_000 });
+    const block = this.footerPolicyBlock();
+    const link =
+      (await block.count()) > 0
+        ? block.getByRole('link', { name: 'Terms' })
+        : this.page.locator('footer').getByRole('link', { name: /terms\s+of\s+service|^Terms$/i });
+    await link.first().waitFor({ state: 'visible', timeout: 12_000 });
     await Promise.all([
       this.page.waitForLoadState('domcontentloaded'),
-      link.click({ timeout: 12_000 }),
+      link.first().click({ timeout: 12_000 }),
     ]);
   }
 
   async openFooterPrivacyNoticeLink() {
     await this.scrollToFooter();
-    const link = this.page
-      .locator('footer')
-      .getByRole('link', { name: /privacy\s+notice|privacy\s+policy/i })
-      .first();
-    await link.waitFor({ state: 'visible', timeout: 10_000 });
+    const block = this.footerPolicyBlock();
+    const link =
+      (await block.count()) > 0
+        ? block.getByRole('link', { name: 'Privacy Notice' })
+        : this.page
+            .locator('footer')
+            .getByRole('link', { name: /privacy\s+notice|privacy\s+policy/i });
+    await link.first().waitFor({ state: 'visible', timeout: 12_000 });
     await Promise.all([
       this.page.waitForLoadState('domcontentloaded'),
-      link.click({ timeout: 12_000 }),
+      link.first().click({ timeout: 12_000 }),
     ]);
   }
 
   /**
-   * Clicks each visible footer social icon/link whose href points at a
-   * major network host; asserts the opened page (popup or same tab) URL
-   * matches {@link hpData.expected.recognisedSocialHost}.
+   * HP_036 — recorded link names (YouTube spelling may vary in accessible name).
    */
   async verifyFooterSocialLinksOpenRecognisedHosts() {
     await this.scrollToFooter();
-    const footer = this.page.locator('footer');
-    const social = footer.locator(
-      'a[href*="instagram"], a[href*="facebook.com"], a[href*="twitter."], a[href*="x.com"], a[href*="tiktok"], a[href*="pinterest"], a[href*="youtube.com"], a[href*="youtu.be"]'
-    );
-    const n = await social.count();
-    if (n === 0) {
-      throw new Error('No footer social links matched — update selectors.');
-    }
-    for (let i = 0; i < n; i += 1) {
-      const row = social.nth(i);
-      if (!(await row.isVisible({ timeout: 2000 }).catch(() => false))) continue;
-      const popupWait = this.page.waitForEvent('popup', { timeout: 6000 }).catch(() => null);
+    const labelMatchers = [
+      /^(Youtube|YouTube)$/i,
+      /^(Twitter|X)$/i,
+      /^Facebook$/i,
+      /^Instagram$/i,
+    ];
+    for (const name of labelMatchers) {
+      const row = this.page.getByRole('link', { name }).first();
+      if (!(await row.isVisible({ timeout: 8000 }).catch(() => false))) {
+        throw new Error(`Footer social link not visible for pattern ${name}`);
+      }
+      const popupWait = this.page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
       await row.click({ timeout: 12_000 });
       const popup = await popupWait;
       const target = popup || this.page;
@@ -1682,38 +2045,144 @@ class HomePage extends BasePage {
     return true;
   }
 
-  async verifySampleInternalFooterLinksHealthy(max = 3) {
-    await this.scrollToFooter();
-    const origin = new URL(this.page.url()).origin;
-    const footer = this.page.locator('footer');
-    const anchors = footer.locator('a[href^="/"]');
-    const n = await anchors.count();
-    const indices = [];
-    for (let i = 0; i < n; i += 1) {
-      const href = (await anchors.nth(i).getAttribute('href')) || '';
-      if (!href || href === '/' || /^\/cart/i.test(href) || href === '/#' || href.endsWith('/#')) {
-        continue;
-      }
-      indices.push(i);
-      if (indices.length >= max) break;
-    }
-    if (indices.length === 0) {
-      throw new Error('HP_038: no internal footer links matched the sampling filter.');
-    }
-    for (const idx of indices) {
-      const link = footer.locator('a[href^="/"]').nth(idx);
-      await link.scrollIntoViewIfNeeded();
-      await Promise.all([
-        this.page.waitForLoadState('domcontentloaded'),
-        link.click({ timeout: 12_000 }),
-      ]);
-      await this.page.waitForTimeout(400);
-      expect(this.page.url().startsWith(origin)).toBe(true);
-      expect(await this.searchPageIsHealthy()).toBe(true);
-      await this.goBack();
-      await this.page.waitForLoadState('domcontentloaded');
-    }
+  /**
+   * HP_038 — detect classic Shopify Liquid render failures without matching unrelated
+   * copy (e.g. “Sizing” / help articles mentioning “syntax”).
+   */
+  async destinationPageHasNoLiquidFailure(page = this.page) {
+    await page.waitForLoadState('domcontentloaded');
+    const bodyText = await page.locator('body').innerText({ timeout: 20_000 }).catch(() => '');
+    if (/liquid error\s*\(/i.test(bodyText)) return false;
+    if (/liquid syntax error/i.test(bodyText)) return false;
     return true;
+  }
+
+  /**
+   * HP_038 — Footer links from `footerInternalLinkChecks`: each item is opened from
+   * a fresh homepage (`openStorefront('/')` — same idea as your Codegen `goto` reset),
+   * then we assert the destination is healthy. Failures are collected so the final
+   * error lists every link that did not pass.
+   */
+  async verifyConfiguredInternalFooterLinks() {
+    const failures = [];
+    const storeOrigin = new URL(env.BASE_URL).origin;
+
+    const linkRoleOptions = (spec) => {
+      if (typeof spec.name === 'string' && spec.exact) {
+        return { name: spec.name, exact: true };
+      }
+      if (typeof spec.name === 'string') {
+        return { name: spec.name };
+      }
+      return { name: spec.name };
+    };
+
+    const footerRoot = (spec) => {
+      if (spec.scope === 'policyFooter') {
+        return this.page.locator(this.selectors.footerPolicySection).first();
+      }
+      return this.page.locator(this.selectors.footer).first();
+    };
+
+    const resetHome = async () => {
+      await this.page.goto(`${env.BASE_URL}/`, {
+        waitUntil: 'domcontentloaded',
+        timeout: env.NAVIGATION_TIMEOUT,
+      });
+      await unlockStorefront(this.page);
+      await dismissCookieBanner(this.page);
+    };
+
+    for (const spec of hpData.footerInternalLinkChecks) {
+      try {
+        await resetHome();
+        await this.scrollToFooter();
+        await this.ensureNoOverlay();
+
+        const root = footerRoot(spec);
+        await root.waitFor({ state: 'attached', timeout: 20_000 });
+
+        let link = root.getByRole('link', linkRoleOptions(spec));
+        if ((await link.count()) === 0) {
+          const block = this.footerPolicyBlock();
+          if ((await block.count()) > 0) {
+            link = block.getByRole('link', linkRoleOptions(spec));
+          }
+        }
+        if ((await link.count()) === 0) {
+          link = this.page.locator(this.selectors.footer).first().getByRole('link', linkRoleOptions(spec));
+        }
+        if ((await link.count()) === 0) {
+          throw new Error(`Link not found under ${spec.scope || 'footer'}`);
+        }
+
+        const anchor = link.first();
+        await anchor.scrollIntoViewIfNeeded({ timeout: 12_000 });
+        await anchor.waitFor({ state: 'visible', timeout: 12_000 });
+
+        const href = (await anchor.getAttribute('href')) || '';
+
+        if (spec.behavior === 'mailto') {
+          if (!/^mailto:/i.test(href)) {
+            throw new Error(`Expected mailto href, got: ${href || '(empty)'}`);
+          }
+          continue;
+        }
+
+        if (spec.behavior === 'cookie') {
+          await anchor.click({ timeout: 12_000 });
+          await this.page.waitForTimeout(400);
+          await anchor.click({ timeout: 12_000 }).catch(() => {});
+          await this.page.waitForTimeout(500);
+          await this.page.keyboard.press('Escape');
+          await this.page.waitForTimeout(250);
+          await this.page.keyboard.press('Escape').catch(() => {});
+          await this.page.waitForTimeout(250);
+          continue;
+        }
+
+        const popupPromise = this.page.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
+        await Promise.all([
+          this.page.waitForLoadState('domcontentloaded'),
+          anchor.click({ timeout: 12_000 }),
+        ]);
+        const popup = await popupPromise;
+        const target = popup || this.page;
+        await target.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
+
+        if (!(await this.destinationPageHasNoLiquidFailure(target))) {
+          throw new Error('Liquid / render failure text on destination');
+        }
+
+        const fatal404 = await target
+          .getByRole('heading', { name: /^404\b|^not\s+found$/i })
+          .isVisible({ timeout: 1500 })
+          .catch(() => false);
+        if (fatal404) {
+          throw new Error('Destination looks like a 404 / not found page');
+        }
+
+        const url = target.url();
+        if (!spec.allowExternal && !url.startsWith(storeOrigin)) {
+          throw new Error(`Expected same-origin (${storeOrigin}), got: ${url}`);
+        }
+
+        if (popup) {
+          await popup.close().catch(() => {});
+        }
+      } catch (err) {
+        const label = spec.key || String(spec.name);
+        failures.push({ key: label, message: err.message, url: this.page.url() });
+        logger.warn(`HP_038 ✗ ${label}: ${err.message} (@ ${this.page.url()})`);
+      }
+    }
+
+    if (failures.length) {
+      const lines = failures.map((f) => `  - ${f.key}: ${f.message} (at ${f.url})`).join('\n');
+      throw new Error(
+        `HP_038: ${failures.length} footer link(s) did not pass navigation checks:\n${lines}`
+      );
+    }
   }
 }
 

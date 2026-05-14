@@ -12,9 +12,6 @@ module.exports = {
   logger: require('./logger'),
   utils: require('./utils'),
   wait: require('./wait.helper'),
-  file: require('./file.helper'),
-  api: require('./api.helper'),
-  otp: require('./otp.helper'),
   browser: require('./browser.helper'),
   storefront: require('./storefront.helper'),
 };

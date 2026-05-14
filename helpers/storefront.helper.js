@@ -69,12 +69,14 @@ async function waitForCloudflareChallenge(page, opts = {}) {
       title = '';
     }
     if (
-      /just a moment|attention required|verifying you are human|checking your browser|please wait\.\.\./i.test(
+      /just a moment|attention required|verifying you are human|checking your browser|please wait\.\.\.|connection needs to be verified|verify you are human/i.test(
         title
       )
     ) {
       return true;
     }
+    const cfCopy = page.getByText(/connection needs to be verified|verify you are human/i).first();
+    if (await cfCopy.isVisible({ timeout: 400 }).catch(() => false)) return true;
     for (const sel of CF_DOM_SIGNALS) {
       const el = page.locator(sel).first();
       const visible = await el.isVisible({ timeout: 250 }).catch(() => false);

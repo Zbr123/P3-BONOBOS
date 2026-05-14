@@ -1,4 +1,0 @@
-{
-  "code": "",
-  "_comment": "Optional fallback used by helpers/otp.helper.js when no real mailbox is configured. Leave empty in production."
-}

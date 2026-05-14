@@ -31,11 +31,7 @@ class CustomWorld extends World {
     this.logger = helpers.logger;
 
     /** Per-scenario shared state — feel free to extend in steps. */
-    this.state = {
-      currentUser: null,
-      lastResponse: null,
-      otpCode: null,
-    };
+    this.state = {};
 
     /** Cached page-object instances. */
     this._pages = {};

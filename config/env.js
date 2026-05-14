@@ -11,17 +11,33 @@ const path = require('path');
 const dotenv = require('dotenv');
 const fs = require('fs-extra');
 
-const ENV_FILE = path.resolve(process.cwd(), '.env');
+/** Repo root (this file lives in `config/`). Do not use only `process.cwd()` — IDEs may use another cwd. */
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const ENV_FILE = path.join(PROJECT_ROOT, '.env');
 
 if (fs.existsSync(ENV_FILE)) {
-  dotenv.config({ path: ENV_FILE });
+  dotenv.config({ path: ENV_FILE, override: true });
 } else {
-  dotenv.config();
+  dotenv.config({ override: true });
 }
 
 const toBool = (value, fallback = false) => {
   if (value === undefined || value === null || value === '') return fallback;
   return String(value).toLowerCase() === 'true';
+};
+
+/**
+ * Playwright `headless` flag. Treats common "off" spellings as headed.
+ * (`toBool` alone is wrong for HEADLESS: `HEADLESS=false` must mean headed.)
+ */
+const toHeadless = (value, fallback = true) => {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return fallback;
+  }
+  const s = String(value).toLowerCase().trim();
+  if (['false', '0', 'no', 'off'].includes(s)) return false;
+  if (['true', '1', 'yes', 'on'].includes(s)) return true;
+  return fallback;
 };
 
 const toInt = (value, fallback) => {
@@ -43,7 +59,13 @@ const env = {
 
   // Browser
   BROWSER: process.env.BROWSER || 'chromium',
-  HEADLESS: toBool(process.env.HEADLESS, true),
+  HEADLESS: toHeadless(process.env.HEADLESS, true),
+  /**
+   * Headed only: `viewport: null` + maximized window so the page fills Chrome
+   * (no grey letterbox). Set `FULL_WINDOW=false` to keep a fixed viewport in
+   * headed mode (VIEWPORT_WIDTH / VIEWPORT_HEIGHT).
+   */
+  FULL_WINDOW: toBool(process.env.FULL_WINDOW, !toHeadless(process.env.HEADLESS, true)),
   SLOW_MO: toInt(process.env.SLOW_MO, 0),
   VIEWPORT_WIDTH: toInt(process.env.VIEWPORT_WIDTH, 1440),
   VIEWPORT_HEIGHT: toInt(process.env.VIEWPORT_HEIGHT, 900),
@@ -63,16 +85,6 @@ const env = {
   USERNAME: process.env.USERNAME_TEST || process.env.TEST_USERNAME || '',
   PASSWORD: process.env.PASSWORD_TEST || process.env.TEST_PASSWORD || '',
 
-  // OTP / 2FA mailbox
-  OTP_EMAIL: process.env.OTP_EMAIL || '',
-  OTP_PASSWORD: process.env.OTP_PASSWORD || '',
-  OTP_IMAP_HOST: process.env.OTP_IMAP_HOST || '',
-  OTP_IMAP_PORT: toInt(process.env.OTP_IMAP_PORT, 993),
-
-  // API
-  API_BASE_URL: process.env.API_BASE_URL || '',
-  API_TOKEN: process.env.API_TOKEN || '',
-
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 
@@ -81,7 +93,7 @@ const env = {
   PERSIST_STATE: toBool(process.env.PERSIST_STATE, true),
   STATE_FILE:
     process.env.STATE_FILE ||
-    path.resolve(process.cwd(), 'state', 'storageState.json'),
+    path.join(PROJECT_ROOT, 'state', 'storageState.json'),
 
   /** Optional full CSS for the homepage hero slideshow root (HP_018). */
   HERO_SLIDESHOW_ROOT: (process.env.HERO_SLIDESHOW_ROOT || '').trim(),

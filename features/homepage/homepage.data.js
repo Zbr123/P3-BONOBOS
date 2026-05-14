@@ -3,8 +3,6 @@
  */
 
 const env = require('../../config/env');
-const faker = require('faker');
-
 const baseUrl = env.BASE_URL.replace(/\/+$/, '');
 
 const expected = {
@@ -83,12 +81,14 @@ const megamenuJeansPantsLabels = [
   'Jeans',
 ];
 
-/** HP_033 — RFC-looking inbox for Klaviyo / Shopify newsletter tests. */
+/** HP_033 — stable inbox for newsletter UI (override with NEWSLETTER_TEST_EMAIL). */
+const defaultNewsletterTestEmail = 'syedzubairalam123@gmail.com';
+
 function newsletterTestEmail() {
   if (process.env.NEWSLETTER_TEST_EMAIL) {
     return process.env.NEWSLETTER_TEST_EMAIL;
   }
-  return faker.internet.email().toLowerCase();
+  return defaultNewsletterTestEmail;
 }
 
 /** HP_019 — “Your Perfect Fit” collection tile link accessible names (DEV theme). */
@@ -99,6 +99,44 @@ const perfectFitCollectionCardNames = [
   'Test Collection 4 Heavy',
 ];
 
+/**
+ * HP_038 — footer links (Codegen / a11y names on Bonobos DEV).
+ * - `key` — stable id for failure reports.
+ * - `name` + `exact` — passed to `getByRole('link', …)`.
+ * - `scope` — `'footer'` (default) or `'policyFooter'` (theme footer section incl. Privacy).
+ * - `behavior` — default: click → assert healthy navigation; `cookie`: double-click + Escape.
+ * - `allowExternal` — allow non-store origin after click (Help, SheerID, careers, etc.).
+ */
+const footerInternalLinkChecks = [
+  { key: 'Help', name: 'Help', allowExternal: true },
+  { key: 'Returns', name: 'Returns', allowExternal: true },
+  { key: 'Fit Quiz', name: 'Fit Quiz' },
+  { key: 'Fit Guide', name: 'Fit Guide', exact: true },
+  { key: 'Chino Fit Guide', name: 'Chino Fit Guide' },
+  { key: 'Guideshop Locations', name: 'Guideshop Locations' },
+  { key: 'Email Us', name: 'Email Us', allowExternal: true },
+  { key: 'Give Us Feedback', name: 'Give Us Feedback', allowExternal: true },
+  { key: 'About Us', name: 'About Us' },
+  { key: 'Jobs', name: 'Jobs', allowExternal: true },
+  { key: 'Wholesale', name: 'Wholesale' },
+  { key: 'Corporate Gear', name: 'Corporate Gear' },
+  { key: 'Friends of Bonobos', name: 'Friends of Bonobos' },
+  { key: 'Get 25% Off', name: 'Get 25% Off', exact: true },
+  { key: 'Gift Cards', name: 'Gift Cards' },
+  { key: 'Teachers', name: 'Teachers', allowExternal: true },
+  { key: 'Students', name: 'Students', allowExternal: true },
+  { key: 'Military', name: 'Military', allowExternal: true },
+  { key: 'First Responders', name: 'First Responders', allowExternal: true },
+  { key: 'Medical Professionals', name: 'Medical Professionals', allowExternal: true },
+  { key: 'Privacy Notice', name: 'Privacy Notice', scope: 'policyFooter' },
+  { key: 'Terms', name: 'Terms', exact: true, scope: 'policyFooter' },
+  { key: 'Cookie Settings', name: 'Cookie Settings', behavior: 'cookie' },
+  { key: 'Do Not Sell', name: /Do Not Sell Or Share My/i, allowExternal: true },
+  { key: 'About Our Ads', name: 'About Our Ads' },
+  { key: 'Accessibility', name: 'Accessibility' },
+  { key: 'Site Map', name: 'Site Map' },
+];
+
 module.exports = {
   baseUrl,
   expected,
@@ -106,4 +144,5 @@ module.exports = {
   megamenuJeansPantsLabels,
   newsletterTestEmail,
   perfectFitCollectionCardNames,
+  footerInternalLinkChecks,
 };

@@ -21,6 +21,7 @@ const { expect } = require('@playwright/test');
 const fs = require('fs');
 
 const env = require('../../config/env');
+const { persistStorageState } = require('../../helpers/browser.helper');
 const {
   unlockStorefront,
   dismissCookieBanner,
@@ -230,7 +231,7 @@ When('he enters the password {string}', async function (password) {
 /**
  * Step 3 — Confirm we landed on the homepage.
  */
-Then('he should see the homepage', async function () {
+Then('he should see the homepage', { timeout: 120_000 }, async function () {
   // CF may still be in front of us right after the gate submits.
   await waitForCloudflareChallenge(this.page);
   await expect(this.page).toHaveURL(
@@ -251,5 +252,18 @@ Then('he should see the homepage', async function () {
   // unlock checks).
   await unlockStorefront(this.page);
 
+  const home = this.getPage('HomePage');
+  await home.waitForHomepageReady(60_000);
+
   this.logger.step('homepage is visible');
+
+  // Persist cf_clearance + storefront cookies as soon as the gate is cleared,
+  // so the next scenario/run does not depend on the whole scenario passing.
+  if (this.context && env.PERSIST_STATE && env.STATE_FILE) {
+    try {
+      await persistStorageState(this.context);
+    } catch (err) {
+      this.logger.warn(`storefront: storage state not persisted — ${err.message}`);
+    }
+  }
 });

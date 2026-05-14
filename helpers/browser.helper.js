@@ -26,10 +26,15 @@ async function startSession() {
   const browser = await launchBrowser();
   const context = await createContext(browser);
   const page = await context.newPage();
-  await page.setViewportSize({
-    width: env.VIEWPORT_WIDTH,
-    height: env.VIEWPORT_HEIGHT,
-  });
+  // Do not override context `viewport: null` (headed full-window); that would
+  // re-apply a fixed emulator size and break visible / maximized runs.
+  const fixedViewport = env.HEADLESS || !env.FULL_WINDOW;
+  if (fixedViewport) {
+    await page.setViewportSize({
+      width: env.VIEWPORT_WIDTH,
+      height: env.VIEWPORT_HEIGHT,
+    });
+  }
   logger.debug('[browser] session started');
   return { browser, context, page };
 }

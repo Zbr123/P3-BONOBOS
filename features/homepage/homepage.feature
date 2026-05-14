@@ -170,6 +170,6 @@ Feature: Bonobos DEV — Home Page (HP_001..HP_038)
     Then each footer social link should open a recognised social network or platform URL
 
   @regression @high @HP_038
-  Scenario: HP_038 — Sample footer links land on configured pages
+  Scenario: HP_038 — Footer internal links navigate without errors
     When the customer scrolls to the site footer
-    Then a sample of internal footer links should load without errors
+    Then each configured internal footer link should navigate or behave correctly

@@ -621,6 +621,11 @@ Then(
   { timeout: 900_000 },
   async function () {
     const home = this.getPage('HomePage');
-    await home.verifyConfiguredInternalFooterLinks();
+    const onPdp = /\/products\//i.test(this.page.url());
+    await home.verifyConfiguredInternalFooterLinks({
+      resetBeforeEachLink: !onPdp,
+      destinationPauseMs: onPdp ? 5000 : 0,
+      failurePrefix: onPdp ? 'CP_025' : 'HP_038',
+    });
   }
 );

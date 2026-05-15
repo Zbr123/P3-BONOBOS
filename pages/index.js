@@ -9,4 +9,5 @@ module.exports = {
   BasePage: require('./base.page'),
   HomePage: require('./homepage.page'),
   CartPage: require('./cart.page'),
+  PdpPage: require('./pdp.page'),
 };

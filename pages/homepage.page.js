@@ -161,19 +161,23 @@ class HomePage extends BasePage {
   // ---------- HP_001 ----------
 
   /**
-   * Returns true once the header logo, announcement bar and footer are
-   * all rendered — a strong signal the homepage is fully loaded.
+   * Returns true once the homepage shell matches `waitForHomepageReady`:
+   * logo + announcement bar + main visible, footer present in DOM.
+   * (Footer is often below the fold — `isVisible()` on footer would falsely
+   * fail HP_001 while the storefront is healthy.)
    */
   async isFullyLoaded() {
     const logo = this.page.locator(this.selectors.headerLogo).first();
     const bar = this.page.locator(this.selectors.announcementBar).first();
+    const main = this.page.locator('#MainContent, main#main, main').first();
     const footer = this.page.locator(this.selectors.footer).first();
-    const checks = await Promise.all([
+    const [logoOk, barOk, mainOk, footerInDom] = await Promise.all([
       logo.isVisible(),
       bar.isVisible(),
-      footer.isVisible(),
+      main.isVisible().catch(() => false),
+      footer.count().then((c) => c > 0),
     ]);
-    return checks.every(Boolean);
+    return logoOk && barOk && mainOk && footerInDom;
   }
 
   /**
@@ -2037,6 +2041,7 @@ class HomePage extends BasePage {
         if (popup) await popup.close().catch(() => {});
         throw new Error(`Social link opened unexpected URL: ${url}`);
       }
+      await target.waitForTimeout(5000);
       if (popup) await popup.close().catch(() => {});
       else await this.goBack();
       await this.page.waitForLoadState('domcontentloaded');
@@ -2057,32 +2062,60 @@ class HomePage extends BasePage {
     return true;
   }
 
+  linkRoleOptions(spec) {
+    if (typeof spec.name === 'string' && spec.exact) {
+      return { name: spec.name, exact: true };
+    }
+    return { name: spec.name };
+  }
+
   /**
-   * HP_038 — Footer links from `footerInternalLinkChecks`: each item is opened from
-   * a fresh homepage (`openStorefront('/')` — same idea as your Codegen `goto` reset),
-   * then we assert the destination is healthy. Failures are collected so the final
-   * error lists every link that did not pass.
+   * Resolve a footer link on the current page (homepage or PDP).
+   * Bonobos theme mounts most footer links under `Footer-sections`, not always `<footer>`.
    */
-  async verifyConfiguredInternalFooterLinks() {
+  async resolveFooterLinkLocator(spec) {
+    const role = this.linkRoleOptions(spec);
+    const scopes = [];
+
+    if (spec.scope === 'policyFooter') {
+      scopes.push(this.page.locator(this.selectors.footerPolicySection).first());
+    } else {
+      const block = this.footerPolicyBlock();
+      if ((await block.count()) > 0) scopes.push(block);
+      scopes.push(this.page.locator(this.selectors.footerPolicySection).first());
+      scopes.push(this.page.locator(this.selectors.footer).first());
+    }
+
+    for (const root of scopes) {
+      if ((await root.count()) === 0) continue;
+      await root.waitFor({ state: 'attached', timeout: 8000 }).catch(() => {});
+      const link = root.getByRole('link', role);
+      if ((await link.count()) > 0) return link.first();
+    }
+
+    const pageLink = this.page.getByRole('link', role);
+    if ((await pageLink.count()) > 0) return pageLink.first();
+
+    throw new Error(`Footer link not found: ${spec.key || String(spec.name)}`);
+  }
+
+  /**
+   * HP_038 / CP_025 — Footer links from `footerInternalLinkChecks`.
+   *
+   * HP_038 (homepage): resets to `/` before each link (Codegen-style).
+   * CP_025 (PDP): stays on the product page, scrolls footer, goes back after each click.
+   *
+   * @param {{ resetBeforeEachLink?: boolean, destinationPauseMs?: number, failurePrefix?: string }} [opts]
+   */
+  async verifyConfiguredInternalFooterLinks(opts = {}) {
+    const {
+      resetBeforeEachLink = true,
+      destinationPauseMs = 0,
+      failurePrefix = 'HP_038',
+    } = opts;
+    const checks = opts.linkChecks ?? hpData.footerInternalLinkChecks;
     const failures = [];
     const storeOrigin = new URL(env.BASE_URL).origin;
-
-    const linkRoleOptions = (spec) => {
-      if (typeof spec.name === 'string' && spec.exact) {
-        return { name: spec.name, exact: true };
-      }
-      if (typeof spec.name === 'string') {
-        return { name: spec.name };
-      }
-      return { name: spec.name };
-    };
-
-    const footerRoot = (spec) => {
-      if (spec.scope === 'policyFooter') {
-        return this.page.locator(this.selectors.footerPolicySection).first();
-      }
-      return this.page.locator(this.selectors.footer).first();
-    };
 
     const resetHome = async () => {
       await this.page.goto(`${env.BASE_URL}/`, {
@@ -2093,30 +2126,19 @@ class HomePage extends BasePage {
       await dismissCookieBanner(this.page);
     };
 
-    for (const spec of hpData.footerInternalLinkChecks) {
-      try {
+    const prepareFooter = async () => {
+      if (resetBeforeEachLink) {
         await resetHome();
-        await this.scrollToFooter();
-        await this.ensureNoOverlay();
+      }
+      await this.scrollToFooter();
+      await this.ensureNoOverlay();
+    };
 
-        const root = footerRoot(spec);
-        await root.waitFor({ state: 'attached', timeout: 20_000 });
+    for (const spec of checks) {
+      try {
+        await prepareFooter();
 
-        let link = root.getByRole('link', linkRoleOptions(spec));
-        if ((await link.count()) === 0) {
-          const block = this.footerPolicyBlock();
-          if ((await block.count()) > 0) {
-            link = block.getByRole('link', linkRoleOptions(spec));
-          }
-        }
-        if ((await link.count()) === 0) {
-          link = this.page.locator(this.selectors.footer).first().getByRole('link', linkRoleOptions(spec));
-        }
-        if ((await link.count()) === 0) {
-          throw new Error(`Link not found under ${spec.scope || 'footer'}`);
-        }
-
-        const anchor = link.first();
+        const anchor = await this.resolveFooterLinkLocator(spec);
         await anchor.scrollIntoViewIfNeeded({ timeout: 12_000 });
         await anchor.waitFor({ state: 'visible', timeout: 12_000 });
 
@@ -2163,24 +2185,32 @@ class HomePage extends BasePage {
         }
 
         const url = target.url();
-        if (!spec.allowExternal && !url.startsWith(storeOrigin)) {
+        if (!spec.allowExternal && !url.startsWith(storeOrigin) && !/bonobos/i.test(url)) {
           throw new Error(`Expected same-origin (${storeOrigin}), got: ${url}`);
+        }
+
+        if (destinationPauseMs > 0) {
+          await target.waitForTimeout(destinationPauseMs);
         }
 
         if (popup) {
           await popup.close().catch(() => {});
+        } else if (!resetBeforeEachLink) {
+          await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: 60_000 });
+          await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+          await this.page.waitForTimeout(400);
         }
       } catch (err) {
         const label = spec.key || String(spec.name);
         failures.push({ key: label, message: err.message, url: this.page.url() });
-        logger.warn(`HP_038 ✗ ${label}: ${err.message} (@ ${this.page.url()})`);
+        logger.warn(`${failurePrefix} ✗ ${label}: ${err.message} (@ ${this.page.url()})`);
       }
     }
 
     if (failures.length) {
       const lines = failures.map((f) => `  - ${f.key}: ${f.message} (at ${f.url})`).join('\n');
       throw new Error(
-        `HP_038: ${failures.length} footer link(s) did not pass navigation checks:\n${lines}`
+        `${failurePrefix}: ${failures.length} footer link(s) did not pass navigation checks:\n${lines}`
       );
     }
   }

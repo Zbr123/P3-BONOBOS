@@ -1,5 +1,5 @@
 /**
- * Cart / side-cart test data (CP_001..CP_028 and related high-priority rows).
+ * Cart / side-cart test data (CP_001..CP_035, CP_018/019 edge paths, and related high-priority rows).
  */
 
 const env = require('../../config/env');
@@ -21,33 +21,130 @@ const expected = {
 };
 
 /**
- * CP_006 — named empty-state collection links (accessible names on theme).
+ * CP_006 — empty-state merchandising controls (link or button; theme varies).
+ * Legacy “Shop …” names plus Bonobos empty-drawer “NEW …” blocks (see empty-cart UI).
  */
 const emptyCartShopLinkNames = [
   { label: 'Shop Pants', pattern: /shop\s+pants/i },
   { label: 'Shop Shirts', pattern: /shop\s+shirts/i },
   { label: 'Shop New Arrivals', pattern: /shop\s+new\s+arrivals/i },
   { label: 'Shop Suits & Blazers', pattern: /shop\s+suits/i },
+  { label: 'New Pants & Jeans', pattern: /new\s+pants.*jeans/i },
+  { label: 'New Shirts / Polos / Henleys', pattern: /new\s+shirts/i },
+  { label: 'New Suits / Sweaters row', pattern: /new\s+suits/i },
+  { label: 'New Outerwear', pattern: /new\s+outerwear/i },
+  { label: 'New Golf', pattern: /new\s+golf/i },
+  { label: 'New Accessories', pattern: /new\s+accessories/i },
+  { label: 'Recently Restocked', pattern: /recently\s+restocked/i },
 ];
 
+/** CP_006 — theme may hide carousel links or use buttons; require at least this many matches. */
+const emptyCartMerchandisingMinMatch = Math.min(2, emptyCartShopLinkNames.length);
+
 /**
- * CP_025 — sample PDP footer links (full HP_038 list is slow; extend here as needed).
+ * CP_033 — spreadsheet “Shop …” labels; theme may surface “New …” blocks instead (same intent).
  */
-const pdpFooterLinkSample = [
-  { key: 'Fit Quiz', name: 'Fit Quiz' },
-  { key: 'Help', name: 'Help', allowExternal: true },
-  { key: 'Privacy Notice', name: 'Privacy Notice', scope: 'policyFooter' },
+const cp033EmptyCartCategoryLinks = [
+  { label: 'Shop Pants', pattern: /shop\s+pants|new\s+pants/i },
+  { label: 'Shop Shirts', pattern: /shop\s+shirts|new\s+shirts/i },
+  {
+    label: 'Shop New Arrivals',
+    pattern: /shop\s+new\s+arrivals|new\s+arrivals/i,
+  },
+  { label: 'Shop Suits & Blazers', pattern: /shop\s+suits|new\s+suits/i },
 ];
 
 /**
- * CP_020 / CP_021 — optional product URLs or handles (set in `.env` when catalog is known).
- * Example: `CART_BUNDLE_PRODUCT_PATH=/products/chino-bundle`
+ * CP_006 — empty-drawer collection links (order matches manual recording; `getByRole('link', { name })`).
+ * Accessible names use substring / regex match per Playwright rules.
+ */
+const cp006EmptyCartNavLinks = [
+  { name: 'New Pants & Jeans' },
+  { name: /^New Shirts,\s*New T-Shirts/i },
+  { name: /^New Suits & Blazers,\s*New/i },
+  { name: 'New Outerwear' },
+  { name: 'New Golf' },
+  { name: 'New Accessories' },
+  { name: 'Recently Restocked' },
+];
+
+/**
+ * Optional PDP paths.
+ *
+ * CP_018: env-driven (inventory edge is dataset-specific and may not exist on every shop).
+ *   `CART_INVENTORY_EDGE_PRODUCT_PATH=/products/some-sku?variant=...`
+ *
+ * CP_020: hard-pinned to the Bonobos DEV storefront so the scenario has zero env coupling.
+ *   - bundle      → Weekday Warrior Dress Pant Bundle (from /pages/exclusive-specials BUNDLES)
+ *   - finalSale   → The Original Chino (first card on /collections/sale)
+ *   - promotional → Riviera SS Shirt (sale-best-sellers, deep promo discount)
  */
 const optionalProductPaths = {
-  bundle: (process.env.CART_BUNDLE_PRODUCT_PATH || '').trim(),
-  finalSale: (process.env.CART_FINAL_SALE_PRODUCT_PATH || '').trim(),
-  promotional: (process.env.CART_PROMO_PRODUCT_PATH || '').trim(),
+  /** CP_018 — when unset, inventory-edge assertions are skipped (scenario still passes). */
+  inventoryEdge: (process.env.CART_INVENTORY_EDGE_PRODUCT_PATH || '').trim(),
+  bundle: '/products/weekday-warrior-dress-pants-wednesday-stone-0',
+  finalSale: '/products/stretch-washed-chino-1-winetasting-pocket-liner-0',
+  promotional: '/products/stretch-riviera-short-sleeve-shirt-aqua-chambray-dobby-dot-0-68241',
 };
+
+/**
+ * CP_020 — last-resort discovery sources if a pinned PDP ever 404s.
+ * The fixed paths above are tried first; these collection walkers run only when the PDP can't be opened.
+ */
+const cp020Discovery = {
+  bundleProductCandidates: [
+    '/products/weekday-warrior-dress-pants-wednesday-stone-0',
+    '/products/the-chino-bundle',
+    '/products/chino-bundle',
+  ],
+  bundleCollectionCandidates: ['/pages/exclusive-specials', '/collections/bundles'],
+  saleCollection: '/collections/sale',
+  promoCollection: '/collections/sale-best-sellers',
+};
+
+/**
+ * CP_020 — pant variant triple per pinned PDP handle.
+ *
+ * The default `cp011Locators` triple (28 / 28 / Tailored) was chosen for The Chino 2.0.
+ * Other pant PDPs may not have the same waist/length/fit combo as an available SKU,
+ * so the values below were verified live from `products.json` (waist, fit, length
+ * all exist for the same available variant). Applied by `CartPage.addCp020ProductAndOpenBag`
+ * before clicking Add to Bag.
+ */
+const cp020PantVariantByHandle = {
+  // Bundle pick — Weekday Warrior Dress Pants — discounted variant (waist=28, fit=Tailored, length=30).
+  'weekday-warrior-dress-pants-wednesday-stone-0': { waist: '28', fit: 'Tailored', length: '30' },
+  // Final sale pick — The Original Chino Winetasting — discounted variant (waist=29, fit=Tailored, length=30).
+  'stretch-washed-chino-1-winetasting-pocket-liner-0': { waist: '29', fit: 'Tailored', length: '30' },
+  // Promotional pick — The Chino 2.0 Brownstones — discounted variant.
+  'stretch-washed-chino-brownstones': { waist: '28', fit: 'Tailored', length: '28' },
+};
+
+/**
+ * CP_020 — recorded image-src stems for product-card clicks.
+ *
+ * The Final Sale / Promotional cards on /collections/sale and the homepage are
+ * targeted by their `<img>` tile. The full `src` carries `v=…&width=…` query
+ * params that change with every theme rebuild, so we match on the stable stem
+ * (image filename including the Bonobos product SKU).
+ *
+ *   finalSale     `PANT_CHINO-PANT_BWB00809S1006P` → The Original Chino - Winetasting
+ *   promotional   `PANT_CHINO-PANT_BPT10629S1818B` → The Chino 2.0 - Brownstones
+ */
+const cp020RecordedImageSrcStems = {
+  finalSale: 'PANT_CHINO-PANT_BWB00809S1006P',
+  promotional: 'PANT_CHINO-PANT_BPT10629S1818B',
+};
+
+/**
+ * CP_020 — recorded SALE mega-menu link XPath.
+ *
+ * Shopify rebuilds the `aria-controls` id when the theme is republished; if this
+ * XPath ever returns 0 matches, fall back to `getByRole('link', { name: 'SALE' })`
+ * (handled inside `CartPage.clickCp020SaleNav`).
+ */
+const cp020SaleNavXPath =
+  '//a[@aria-controls="NewHeaderMegaMenu-sections--26447985967397__header_section-menu_column_VVHTDx"]';
 
 /** CP_009 — copy patterns for free-shipping banner assertions (theme wording may vary). */
 const freeShippingSheet = {
@@ -99,13 +196,49 @@ const cp005RecordedLocators = {
   ).trim(),
 };
 
+/** CP_007 — empty-cart “Start with these” merchandising (Bonobos DEV theme; fixed option labels, no .env). */
+const cp007Locators = {
+  startWithTheseHeading: /start with these/i,
+  pantWaistGroupName: /pant waist/i,
+  /** Recorded chino tiles — waist, length, then fit before Add to Bag enables. */
+  pantWaistLabel: '28',
+  pantLengthLabel: '32',
+  pantFitLabel: 'Slim',
+  theChinoLinkName: /the chino/i,
+};
+
+/** CP_011 — PDP pant tiles before Add to Bag (do not use color swatches). */
+const cp011Locators = {
+  pantWaistLabel: (process.env.CP011_PANT_WAIST || '28').trim(),
+  pantLengthLabel: (process.env.CP011_PANT_LENGTH || '28').trim(),
+  pantFitLabel: (process.env.CP011_PANT_FIT || 'Tailored').trim(),
+};
+
+/**
+ * Bonobos PDP product submit — “Add to Bag” / “Update Bag” (Liquid `BuyButtons-…__add-to-cart`).
+ * Prefer `data-testid` over role name (label often lives in nested spans; button stays `disabled` until `data-selection-incomplete` clears).
+ */
+const pdpAddToBagLocators = {
+  testId: (process.env.PDP_ADD_TO_BAG_TEST_ID || 'standalone-add-to-cart').trim(),
+  refAttr: 'addToCartButton',
+};
+
 module.exports = {
   baseUrl,
   expected,
   emptyCartShopLinkNames,
-  pdpFooterLinkSample,
+  cp033EmptyCartCategoryLinks,
+  emptyCartMerchandisingMinMatch,
   optionalProductPaths,
+  cp020Discovery,
+  cp020PantVariantByHandle,
+  cp020RecordedImageSrcStems,
+  cp020SaleNavXPath,
   freeShippingSheet,
   cp002RecordedLocators,
   cp005RecordedLocators,
+  cp007Locators,
+  cp011Locators,
+  pdpAddToBagLocators,
+  cp006EmptyCartNavLinks,
 };

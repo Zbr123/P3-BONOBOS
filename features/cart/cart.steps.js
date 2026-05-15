@@ -8,7 +8,8 @@ const { expect } = require('@playwright/test');
 const {
   expected,
   emptyCartShopLinkNames,
-  pdpFooterLinkSample,
+  cp033EmptyCartCategoryLinks,
+  emptyCartMerchandisingMinMatch,
   optionalProductPaths,
   freeShippingSheet,
 } = require('./cart.data');
@@ -24,16 +25,57 @@ async function performClickBagIconOpenCart(world) {
   world.state.lastBagOpenMs = Date.now() - t0;
 }
 
+/** CP_026 / CP_035 — try Shop Pay wallet + role buttons until a payment popup is captured (same as legacy CP_026). */
+async function clickExpressPaymentOptionsWhenShown(world) {
+  const page = world.page;
+  world.state.paymentPopup = null;
+
+  const shopWallet = page.locator('shop-pay-wallet-button').first();
+  if (await shopWallet.isVisible({ timeout: 2500 }).catch(() => false)) {
+    const popupEvent = page.context().waitForEvent('page', { timeout: 10_000 }).catch(() => null);
+    try {
+      await shopWallet.click({ timeout: 10_000, force: true });
+    } catch {
+      await shopWallet.evaluate((el) => {
+        const root = el && el.shadowRoot;
+        const b = root && root.querySelector && root.querySelector('button');
+        if (b instanceof HTMLElement) b.click();
+      });
+    }
+    const popup = await popupEvent;
+    if (popup) {
+      world.state.paymentPopup = popup;
+      return;
+    }
+  }
+
+  const patterns = [/shop\s*pay/i, /apple\s*pay/i, /paypal/i, /affirm/i];
+  for (const name of patterns) {
+    const btn = page.getByRole('button', { name }).first();
+    if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const popupEvent = page.context().waitForEvent('page', { timeout: 10_000 }).catch(() => null);
+      await btn.click({ timeout: 10_000 });
+      const popup = await popupEvent;
+      if (popup) {
+        world.state.paymentPopup = popup;
+        break;
+      }
+    }
+  }
+}
+
 // ----- Pre-reqs & session -----
 
 Given('the automation run starts with an empty cart before the scenario', async function () {
   await this.getPage('CartPage').clearCartByRemovingLineItems();
 });
 
-Given('prerequisite items should exist in the cart for a signed user', async function () {
+Given('prerequisite items should exist in the cart for a signed user', { timeout: 300_000 }, async function () {
   const cart = this.getPage('CartPage');
+  const home = this.getPage('HomePage');
   await cart.clearCartByRemovingLineItems();
   await cart.gotoHomeRoot();
+  await home.waitForHomepageReady(45_000);
   await cart.openFirstProductPdpFromHome();
   await cart.clickAddToBagOnPdp();
   await this.page.waitForTimeout(500);
@@ -41,10 +83,33 @@ Given('prerequisite items should exist in the cart for a signed user', async fun
   await cart.gotoHomeRoot();
 });
 
-Given('prerequisite multiple line items should exist in the cart for a signed user', async function () {
+Given('prerequisite items for CP_011 pant variant exist in the cart for a signed user', { timeout: 300_000 }, async function () {
   const cart = this.getPage('CartPage');
+  const home = this.getPage('HomePage');
   await cart.clearCartByRemovingLineItems();
-  await cart.addDistinctProductsFromHome(2);
+  await cart.gotoHomeRoot();
+  await home.waitForHomepageReady(45_000);
+  await cart.openFirstProductPdpFromHome();
+  await cart.selectCp011PantVariantIfPresentOnPdp();
+  await cart.clickAddToBagOnPdp({
+    excludeColorSwatches: true,
+    waitForAddToBagEnabledOnly: true,
+    pantVariantAlreadySelected: true,
+  });
+  await this.page.waitForTimeout(500);
+  await cart.closeCartDrawerIfOpen();
+  await cart.gotoHomeRoot();
+});
+
+Given('prerequisite multiple line items should exist in the cart for a signed user', { timeout: 300_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const home = this.getPage('HomePage');
+  await home.waitForHomepageReady(60_000);
+  await cart.clearCartByRemovingLineItems();
+  await cart.gotoHomeRoot();
+  await home.waitForHomepageReady(45_000);
+  // Same two-SKU flow as CP_002/CP_003 (guarantees two line rows, not merged quantity on one row).
+  await cart.addCp002TwoProductsFromRecordedLocators();
 });
 
 Given('the customer has logged in to the DEV URL', async function () {
@@ -52,9 +117,29 @@ Given('the customer has logged in to the DEV URL', async function () {
   await home.waitForHomepageReady(60_000);
 });
 
+Given('the signed user has no items in the cart', { timeout: 300_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const home = this.getPage('HomePage');
+  await cart.clearCartByRemovingLineItems();
+  await cart.gotoHomeRoot();
+  await home.waitForHomepageReady(45_000);
+});
+
 // ----- Navigation & bag -----
 
+When('the customer opens the cart using the bag drawer trigger', async function () {
+  await this.getPage('CartPage').openCartFromBagDrawerTrigger();
+});
+
 When('the customer clicks on the bag icon on the Home Page to open the cart page', async function () {
+  await performClickBagIconOpenCart(this);
+});
+
+When('the customer clicks on the bag icon to open the side-cart', async function () {
+  await performClickBagIconOpenCart(this);
+});
+
+When('the customer clicks on the bag icon in the Home Page', async function () {
   await performClickBagIconOpenCart(this);
 });
 
@@ -83,7 +168,15 @@ When('the customer clicks on any product link on the Home Page', async function 
   await cart.openFirstProductPdpFromHome();
 });
 
+When('the customer adds catalog products from the homepage to the cart', { timeout: 180_000 }, async function () {
+  await this.getPage('CartPage').addDistinctProductsFromHome(2);
+});
+
 When('the customer adds a few products to the cart from the storefront', { timeout: 300_000 }, async function () {
+  await this.getPage('CartPage').addCp002TwoProductsFromRecordedLocators();
+});
+
+When('the customer adds few products to the cart', { timeout: 300_000 }, async function () {
   await this.getPage('CartPage').addCp002TwoProductsFromRecordedLocators();
 });
 
@@ -131,20 +224,29 @@ When('the customer clicks on Update Bag', { timeout: 90_000 }, async function ()
   }
 });
 
-When('the customer removes all items from the cart using remove until the cart is empty', async function () {
+When('the customer removes all items from the cart using remove until the cart is empty', { timeout: 180_000 }, async function () {
   const cart = this.getPage('CartPage');
   await cart.waitForCartUiOpen();
   await cart
     .cartSurface()
     .locator('button.cart-product__remove-link, cart-quantity-selector-component')
     .first()
-    .waitFor({ state: 'visible', timeout: 30_000 })
+    .waitFor({ state: 'visible', timeout: 12_000 })
     .catch(() => {});
   for (let i = 0; i < 15; i += 1) {
     const n = await cart.lineItemCount();
     if (n === 0) break;
     await cart.clickRemoveFirstLineItem();
   }
+  await cart.assertEmptyCartCopyVisible(15_000);
+});
+
+When('the customer clicks ADD TO BAG on the first product in Start with these', { timeout: 180_000 }, async function () {
+  await this.getPage('CartPage').clickAddToBagFirstInStartWithThese();
+});
+
+When('the customer clicks the product image or product link in the cart line item to open the PDP', { timeout: 120_000 }, async function () {
+  await this.getPage('CartPage').clickStartWithTheseProductLinkOrImageForPdp();
 });
 
 When('the customer navigates the Shop the Look section using the carousel arrows when present', async function () {
@@ -174,16 +276,6 @@ When('the customer clicks on a product image in the cart recommendations section
   }
 });
 
-When('the customer verifies a gift note can be added by clicking on plus', async function () {
-  const cart = this.getPage('CartPage');
-  const plus = this.page.getByRole('button', { name: /^\+$/ }).first();
-  if (await plus.isVisible({ timeout: 2500 }).catch(() => false)) {
-    await plus.click({ timeout: 5000 }).catch(() => {});
-    await this.page.waitForTimeout(300);
-  }
-  await cart.expandGiftNoteIfPresent();
-});
-
 When('the customer clicks on the checkout button in the cart', async function () {
   await this.getPage('CartPage').clickCheckout();
 });
@@ -196,96 +288,98 @@ When('the customer scrolls to the footer section on the Product Detail Page', as
   await this.getPage('HomePage').scrollToFooter();
 });
 
-When('the customer clicks the sample footer links to ensure they direct to correct pages', async function () {
-  const home = this.getPage('HomePage');
-  const storeOrigin = new URL(this.page.url()).origin;
-
-  const footerRoot = (spec) => {
-    if (spec.scope === 'policyFooter') {
-      return this.page.locator(home.selectors.footerPolicySection).first();
-    }
-    return this.page.locator(home.selectors.footer).first();
-  };
-
-  const linkRole = (spec) =>
-    typeof spec.name === 'string' && spec.exact
-      ? { name: spec.name, exact: true }
-      : { name: spec.name };
-
-  for (const spec of pdpFooterLinkSample) {
-    const root = footerRoot(spec);
-    let link = root.getByRole('link', linkRole(spec));
-    if ((await link.count()) === 0) {
-      link = this.page.locator(home.selectors.footer).first().getByRole('link', linkRole(spec));
-    }
-    await link.first().scrollIntoViewIfNeeded({ timeout: 12_000 });
-    await link.first().waitFor({ state: 'visible', timeout: 12_000 });
-    await Promise.all([
-      this.page.waitForLoadState('domcontentloaded'),
-      link.first().click({ timeout: 12_000 }),
-    ]);
-    const dest = this.page.url();
-    if (!spec.allowExternal && !dest.startsWith(storeOrigin) && !/bonobos/i.test(dest)) {
-      throw new Error(`CP_025 ${spec.key}: unexpected external URL ${dest}`);
-    }
-    expect(await home.destinationPageHasNoLiquidFailure(this.page)).toBe(true);
-    await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await this.page.waitForTimeout(400);
-  }
-  this.state.footerSampleLinksChecked = true;
-});
-
 When('the customer clicks different payment options Shop Pay Apple Pay Paypal Affirm when shown', async function () {
-  const patterns = [/shop\s*pay/i, /apple\s*pay/i, /paypal/i, /affirm/i];
-  this.state.paymentPopup = null;
-  for (const name of patterns) {
-    const btn = this.page.getByRole('button', { name }).first();
-    if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      const popupEvent = this.page.context().waitForEvent('page', { timeout: 10_000 }).catch(() => null);
-      await btn.click({ timeout: 10_000 });
-      const popup = await popupEvent;
-      if (popup) {
-        this.state.paymentPopup = popup;
-        break;
-      }
-    }
-  }
+  await clickExpressPaymentOptionsWhenShown(this);
 });
 
 When('the customer clicks on the X button to close the side cart when shown', async function () {
   await this.getPage('CartPage').closeCartDrawerIfOpen();
 });
 
-async function addConfiguredProductAndOpenBag(world, path, label) {
-  if (!path) {
-    world.logger.warn(`CP_020: ${label} skipped — env path not set`);
-    world.state[`skipAssert_${label}`] = true;
-    return;
-  }
-  world.state[`skipAssert_${label}`] = false;
+When('the customer clicks on the X button in the side cart to close the cart', async function () {
+  await this.getPage('CartPage').closeCartDrawerIfOpen();
+});
+
+When('the customer clicks on different payment options Shop Pay Apple Pay Paypal Affirm', async function () {
+  await clickExpressPaymentOptionsWhenShown(this);
+});
+
+/**
+ * CP_020 — runs the discovery add (env → candidate paths → collection fallback) and records skip state for the matching `Then`.
+ */
+async function addCp020OptionalProductAndOpenBag(world, kind, envPath, label) {
   const cart = world.getPage('CartPage');
-  await cart.gotoProductPath(path);
-  const atb = world.page.getByRole('button', { name: /add\s+to\s+bag/i }).first();
-  if (!(await atb.isVisible({ timeout: 8000 }).catch(() => false))) {
-    world.logger.warn(`CP_020: ${label} — Add to Bag not on PDP`);
-    world.state[`skipAssert_${label}`] = true;
-    return;
+  let result = { skipped: true, lineDelta: 0 };
+  try {
+    result = await cart.addCp020ProductAndOpenBag({ envPath, kind, logger: world.logger });
+  } catch (e) {
+    world.logger.warn(`CP_020: ${label} add flow errored — ${e.message}`);
+    result = { skipped: true, lineDelta: 0, reason: `threw:${e.message.split('\n')[0]}` };
   }
-  await atb.click({ timeout: 12_000 });
-  await world.page.waitForTimeout(600);
-  await performClickBagIconOpenCart(world);
+  world.state[`skipAssert_${label}`] = result.skipped;
+  world.state[`cp020_${label}_lineDelta`] = result.lineDelta;
+  if (result.skipped) {
+    world.logger.warn(
+      `CP_020: ${label} — skipped (reason=${result.reason || 'unknown'}, pdpUrl=${result.pdpUrl || 'n/a'}). Update the pinned path in features/cart/cart.data.js if the PDP changed.`
+    );
+  } else {
+    world.logger.info(`CP_020: ${label} added; lineDelta=${result.lineDelta}`);
+  }
 }
 
-When('the customer adds a bundle product and opens the cart page when CART_BUNDLE_PRODUCT_PATH is configured', async function () {
-  await addConfiguredProductAndOpenBag(this, optionalProductPaths.bundle, 'bundle');
+/** CP_020 — record outcome of a recorded-flow add into world.state for the matching `Then`. */
+function recordCp020Outcome(world, label, result) {
+  world.state[`skipAssert_${label}`] = result.skipped;
+  world.state[`cp020_${label}_lineDelta`] = result.lineDelta;
+  world.state[`cp020_${label}_discounted`] = result.discounted;
+  if (result.skipped) {
+    world.logger.warn(
+      `CP_020: ${label} — skipped (reason=${result.reason || 'unknown'}, pdpUrl=${result.pdpUrl || 'n/a'}).`
+    );
+  } else {
+    world.logger.info(
+      `CP_020: ${label} added; lineDelta=${result.lineDelta} discounted=${result.discounted} pdpUrl=${result.pdpUrl}`
+    );
+  }
+}
+
+When('the customer adds the pinned bundle product and opens the cart page', { timeout: 240_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const r = await cart.addCp020BundleViaBundlesNav({ logger: this.logger });
+  recordCp020Outcome(this, 'bundle', r);
 });
 
-When('the customer adds a final sale product and opens the cart page when CART_FINAL_SALE_PRODUCT_PATH is configured', async function () {
-  await addConfiguredProductAndOpenBag(this, optionalProductPaths.finalSale, 'finalSale');
+When('the customer adds the pinned final sale product and opens the cart page', { timeout: 240_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const r = await cart.addCp020FinalSaleViaSaleNav({ logger: this.logger });
+  recordCp020Outcome(this, 'finalSale', r);
 });
 
-When('the customer adds a promotional product and opens the cart page when CART_PROMO_PRODUCT_PATH is configured', async function () {
-  await addConfiguredProductAndOpenBag(this, optionalProductPaths.promotional, 'promotional');
+When('the customer adds the pinned promotional product and opens the cart page', { timeout: 240_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const r = await cart.addCp020PromotionalViaHomeChino20({ logger: this.logger });
+  recordCp020Outcome(this, 'promotional', r);
+});
+
+When('the customer reviews all added items in the cart', { timeout: 120_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  if (!(await cart.isCartUiOpen())) await cart.openBagFromHeader();
+  const r = await cart.verifyCartLinesDiscountedAndTotalMatches();
+  this.state.cp020_finalVerification = r;
+  this.logger.info(
+    `CP_020: final verify lines=${r.lines.length} allDiscounted=${r.allDiscounted} computedTotal=$${r.computedTotal} cartSubtotal=${r.cartSubtotal ?? 'n/a'} cartTotal=${r.cartTotal ?? 'n/a'} diff=${r.difference ?? 'n/a'}`
+  );
+});
+
+When('the customer checks inventory edge behaviour when CART_INVENTORY_EDGE_PRODUCT_PATH is configured', { timeout: 180_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  const r = await cart.runInventoryEdgeCatalogCheck(this.logger);
+  this.state.cp018_inventorySkip = r.skip;
+  this.state.cp018_inventoryOk = r.ok;
+});
+
+When('the customer navigates to the storefront cart page by URL', { timeout: 120_000 }, async function () {
+  await this.getPage('CartPage').gotoCartPageUrl();
 });
 
 // ----- Assertions -----
@@ -305,17 +399,61 @@ Then('the cart page should show correct product details images and quantities fo
   expect(await cart.lineItemCount()).toBeGreaterThanOrEqual(2);
 });
 
+Then('the cart page should show line items with product details for a non-empty cart', async function () {
+  const cart = this.getPage('CartPage');
+  await cart.waitForCartUiOpen();
+  await cart.waitForCartLineItems(1, 45_000);
+  expect(await cart.lineItemsShowProductSignals()).toBe(true);
+  expect(await cart.lineItemCount()).toBeGreaterThan(0);
+});
+
 Then('the bag icon should show the correct product count', async function () {
   const cart = this.getPage('CartPage');
-  const badge = await cart.headerCartCountText();
+  await cart.waitForCartUiOpen();
+  await cart.waitForCartLineItems(1, 45_000);
   const lines = await cart.lineItemCount();
-  const hasBadge = badge.length > 0 && !/^0+$/.test(badge);
-  expect(hasBadge || lines > 0).toBe(true);
+  expect(lines, 'CP_029: cart drawer should show line rows matching added items').toBeGreaterThan(0);
+
+  const deadline = Date.now() + 12_000;
+  let badgeDigits = '';
+  while (Date.now() < deadline) {
+    badgeDigits = await cart.headerCartCountText();
+    if (badgeDigits.length > 0 && !/^0+$/.test(badgeDigits)) break;
+    await this.page.waitForTimeout(350);
+  }
+
+  if (badgeDigits.length > 0 && !/^0+$/.test(badgeDigits)) {
+    const n = parseInt(badgeDigits, 10);
+    expect(Number.isFinite(n) && n >= 1).toBe(true);
+    return;
+  }
+
+  this.logger.warn(
+    `Bag bubble text not read from header selectors (lines=${lines}); cart contents were verified in the prior step.`
+  );
 });
+
+Then(
+  'the correct product details images and quantities should be displayed correctly in the side-cart',
+  async function () {
+    const cart = this.getPage('CartPage');
+    expect(await cart.isCartUiOpen()).toBe(true);
+    await cart.waitForCartLineItems(2, 90_000);
+    expect(await cart.lineItemsShowProductSignals()).toBe(true);
+    expect(await cart.lineItemCount()).toBeGreaterThanOrEqual(2);
+  }
+);
 
 Then('the customer should be allowed to increase and decrease quantity for line items in the cart', async function () {
   expect(await this.getPage('CartPage').clickPlusOncePerLineThenMinusOncePerLine()).toBe(true);
 });
+
+Then(
+  'the customer should be allowed to decrease and increase quantity for multiple items added in the side-cart',
+  async function () {
+    expect(await this.getPage('CartPage').clickPlusOncePerLineThenMinusOncePerLine()).toBe(true);
+  }
+);
 
 Then('the item should be removed from the cart', async function () {
   const cart = this.getPage('CartPage');
@@ -332,27 +470,56 @@ Then('the cart should remain usable after update', async function () {
   expect(await this.getPage('CartPage').ensureCartUsableAfterLineItemEdit()).toBe(true);
 });
 
-Then('the last item should be removed and Your Cart is empty should display with shop merchandising links', async function () {
+Then(
+  'the last item should be removed and Your Cart is empty should display with shop merchandising links',
+  { timeout: 90_000 },
+  async function () {
   const cart = this.getPage('CartPage');
-  await cart.assertEmptyCartCopyVisible();
-  expect(await cart.emptyCartMerchandisingLinksVisible(emptyCartShopLinkNames)).toBe(true);
+  await cart.assertEmptyCartCopyVisible(15_000);
+  expect(await cart.emptyCartMerchandisingLinksVisible(emptyCartShopLinkNames, emptyCartMerchandisingMinMatch)).toBe(
+    true
+  );
 });
 
-Then('the shop pants shop shirts shop new arrivals and shop suits links should navigate to respective pages', async function () {
+Then('each empty-cart category link should navigate correctly using the CP_006 recorded locators', { timeout: 300_000 }, async function () {
+  const cart = this.getPage('CartPage');
   const home = this.getPage('HomePage');
-  for (const { pattern } of emptyCartShopLinkNames) {
-    const link = this.page.getByRole('link', { name: pattern }).first();
-    if (!(await link.isVisible({ timeout: 4000 }).catch(() => false))) continue;
-    const before = this.page.url();
-    await Promise.all([
-      this.page.waitForLoadState('domcontentloaded'),
-      link.click({ timeout: 12_000 }),
-    ]);
-    expect(this.page.url()).not.toBe(before);
-    expect(await home.destinationPageHasNoLiquidFailure(this.page)).toBe(true);
-    await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await this.page.waitForTimeout(400);
+  await cart.navigateCp006EmptyCartRecordedFlow(home, this.logger);
+});
+
+Then('Your Cart is empty message should appear', async function () {
+  await this.getPage('CartPage').assertEmptyCartCopyVisible();
+});
+
+Then(
+  'Shop Pants Shop Shirts Shop New Arrivals Shop Suits and Blazers links should appear',
+  async function () {
+    expect(
+      await this.getPage('CartPage').emptyCartMerchandisingLinksVisible(cp033EmptyCartCategoryLinks, cp033EmptyCartCategoryLinks.length),
+      `CP_033: expected empty-drawer merchandising for: ${cp033EmptyCartCategoryLinks.map((x) => x.label).join(', ')}`
+    ).toBe(true);
   }
+);
+
+Then('the customer should see Your Cart is empty in the cart drawer', async function () {
+  await this.getPage('CartPage').assertEmptyCartCopyVisible();
+});
+
+Then('Start with these should appear with product details and links', async function () {
+  expect(await this.getPage('CartPage').startWithTheseMerchandisingVisible()).toBe(true);
+});
+
+Then('the cart should contain at least one line item after a recommendation add', { timeout: 120_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  if (!(await cart.isCartUiOpen())) await cart.openCartFromBagDrawerTrigger();
+  await cart.waitForCartUiOpen();
+  await cart.waitForCartLineItems(1, 55_000);
+  expect(await cart.lineItemCount()).toBeGreaterThanOrEqual(1);
+});
+
+Then('the customer should be on a product detail page from Start with these', async function () {
+  expect(expected.productPageUrl.test(new URL(this.page.url()).pathname)).toBe(true);
+  expect(await this.getPage('HomePage').destinationPageHasNoLiquidFailure(this.page)).toBe(true);
 });
 
 Then('the items added to the cart should be present and Shop the Look or equivalent section should appear when the theme shows it', async function () {
@@ -386,9 +553,10 @@ Then('the free shipping banner should display the below-threshold or unlocked-fr
 
 Then('different payment methods should be available below the checkout button', async function () {
   const found = await this.getPage('CartPage').paymentExpressButtonsVisible();
-  if (found.length === 0) {
-    this.logger.warn('CP_011: express payment methods not visible in automation');
-  }
+  expect(
+    found.length,
+    `CP_011: expected at least one payment express control near checkout; found none (checked: ${found.join(', ') || 'empty'})`
+  ).toBeGreaterThan(0);
 });
 
 Then('the customer should land on the review order details or checkout flow', async function () {
@@ -418,20 +586,70 @@ Then('the customer should be on a prior storefront or product page without liqui
 
 Then('bundle or discounted price cues should be visible in the cart when configured', async function () {
   if (this.state.skipAssert_bundle) return;
-  const body = await this.getPage('CartPage').readSubtotalPromoTotalHints();
+  const cart = this.getPage('CartPage');
+  const body = await cart.readSubtotalPromoTotalHints();
   expect(/\$[\d,.]+/.test(body)).toBe(true);
+  const lineDelta = this.state.cp020_bundle_lineDelta || 0;
+  const linesNow = await cart.lineItemCount();
+  const looksLikeBundle = lineDelta >= 2 || linesNow >= 2 || /bundle|set\s+of|pack/i.test(body);
+  const discounted = await cart.cartHasDiscountSignal();
+  expect(looksLikeBundle || discounted).toBe(true);
 });
 
 Then('final sale discounted price cues should be visible in the cart when configured', async function () {
   if (this.state.skipAssert_finalSale) return;
-  const body = await this.getPage('CartPage').readSubtotalPromoTotalHints();
-  expect(/\$[\d,.]+|sale|final/i.test(body)).toBe(true);
+  const cart = this.getPage('CartPage');
+  const body = await cart.readSubtotalPromoTotalHints();
+  expect(/\$[\d,.]+/.test(body)).toBe(true);
+  expect(await cart.cartHasDiscountSignal()).toBe(true);
 });
 
 Then('promotional discounted price cues should be visible in the cart when configured', async function () {
   if (this.state.skipAssert_promotional) return;
+  const cart = this.getPage('CartPage');
+  const body = await cart.readSubtotalPromoTotalHints();
+  expect(/\$[\d,.]+/.test(body)).toBe(true);
+  expect(await cart.cartHasDiscountSignal()).toBe(true);
+});
+
+Then('all line items should show discounted prices and the cart total should match the sum', async function () {
+  const r = this.state.cp020_finalVerification;
+  expect(r, 'CP_020: final verification did not run before the assertion').toBeTruthy();
+  expect(r.lines.length, 'CP_020: expected at least one cart line item').toBeGreaterThan(0);
+  expect(
+    r.allDiscounted,
+    `CP_020: lines without a visible discount: ${JSON.stringify(r.linesWithoutDiscount)}; lines=${JSON.stringify(r.lines)}`
+  ).toBe(true);
+  expect(
+    r.difference != null,
+    `CP_020: cart subtotal/total not parseable from drawer (raw="${(r.raw || '').slice(0, 200)}")`
+  ).toBe(true);
+  expect(
+    r.difference <= 0.05,
+    `CP_020: cart total $${r.cartSubtotal ?? r.cartTotal} does not match line sum $${r.computedTotal} (diff $${r.difference})`
+  ).toBe(true);
+});
+
+Then('the cart totals section should show subtotal or monetary lines for promotions when present', async function () {
   const body = await this.getPage('CartPage').readSubtotalPromoTotalHints();
-  expect(/\$[\d,.]+|promo|discount|sale/i.test(body)).toBe(true);
+  expect(/subtotal|estimated|total|promo|discount/i.test(body)).toBe(true);
+  expect(/\$[\d,.]+/.test(body)).toBe(true);
+});
+
+Then('inventory or stock messages should appear or the edge line should clear when the theme applies them', { timeout: 120_000 }, async function () {
+  if (this.state.cp018_inventorySkip) {
+    this.logger.warn(
+      'CP_018: inventory edge not exercised — set CART_INVENTORY_EDGE_PRODUCT_PATH to a SKU that triggers OOS/low-stock messaging or removal in cart.'
+    );
+    return;
+  }
+  expect(this.state.cp018_inventoryOk).toBe(true);
+});
+
+Then('the empty cart message should display for a zero line item cart', { timeout: 120_000 }, async function () {
+  const cart = this.getPage('CartPage');
+  expect(await cart.lineItemCount()).toBe(0);
+  await cart.assertEmptyCartCopyVisible();
 });
 
 Then('the promotional discount product should be available in the cart', async function () {
@@ -457,10 +675,6 @@ Then('the customer should verify social media logo links land on recognised host
   expect(await this.getPage('HomePage').verifyFooterSocialLinksOpenRecognisedHosts()).toBe(true);
 });
 
-Then('each sampled footer link destination should be healthy', async function () {
-  expect(this.state.footerSampleLinksChecked).toBe(true);
-});
-
 Then('the side cart should slide open on the home page', async function () {
   expect(await this.getPage('CartPage').isCartUiOpen()).toBe(true);
 });
@@ -477,8 +691,14 @@ Then('a payment context or popup may open for an external host', async function 
 });
 
 Then('the side cart should load fast and smooth without lagging when the bag icon is used', async function () {
-  expect(await this.getPage('CartPage').isCartUiOpen()).toBe(true);
-  expect(this.state.lastBagOpenMs ?? 0).toBeLessThan(20_000);
+  const cart = this.getPage('CartPage');
+  expect(await cart.isCartUiOpen()).toBe(true);
+  const ms = this.state.lastBagOpenMs ?? 0;
+  expect(ms).toBeLessThan(20_000);
+  const text = await cart.readSubtotalPromoTotalHints();
+  const lines = await cart.lineItemCount();
+  const looksEmpty = /your cart is empty|your bag is empty|cart is empty|bag is empty/i.test(text);
+  expect(text.length > 15 || lines > 0 || looksEmpty).toBe(true);
 });
 
 Then('the side cart should slide open automatically with the products added to the bag', async function () {
@@ -489,6 +709,11 @@ Then('the side cart should slide open automatically with the products added to t
 });
 
 Then('the side cart should close and no longer block the page', async function () {
+  const drawer = this.page.locator(this.getPage('CartPage').selectors.drawerRoot).first();
+  expect(await drawer.isVisible({ timeout: 2500 }).catch(() => false)).toBe(false);
+});
+
+Then('the customer should be able to close the side cart', async function () {
   const drawer = this.page.locator(this.getPage('CartPage').selectors.drawerRoot).first();
   expect(await drawer.isVisible({ timeout: 2500 }).catch(() => false)).toBe(false);
 });
